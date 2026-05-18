@@ -1,42 +1,59 @@
-# /roast — stress test against `roastrebuild-remotion`
+# /roast v0.2 — validation re-test against `roastrebuild-remotion`
 
-**Target:** `/Users/janderswag/Desktop/roastrebuild-remotion` — a Remotion
-video-rendering project (not a web app, not a SaaS, no user-facing surface).
+**Target:** `/Users/janderswag/Desktop/roastrebuild-remotion` — same Remotion
+video-rendering project that produced the v0.1 stress-test transcript
+(`examples/roast-remotion.md`).
 
-**Purpose of this run:** stress test the skill methodology against a
-codebase it was not designed for. Where the methodology breaks, that's
-the finding.
+**Purpose of this run:** verify that the v0.2 methodology fixes
+(Phase 0.5 shape classifier, N/A return contracts, inline-dispatch for
+small repos, fast-exit, clean-zero semgrep template) actually produce
+cleaner output than the v0.1 baseline. Same repo, new methodology.
 
 ---
 
 ```
 [detecting stack...]
 ✓ Node / TypeScript (package.json + tsconfig.json)
-✓ Remotion 4.x (no Next.js, no Vite, no SvelteKit)
-✓ React 18.3 (used only as Remotion's component runtime)
-✓ No git repo. No README.md. No .env. No .gitignore.
-✓ 8 source files, 428 LOC total (src/*.tsx + src/data/storyboard.ts)
-✓ Deploy target: local CLI render only (npm run render:*). No server,
-  no API surface, no auth, no DB, no payments, no users.
+✓ Remotion 4.x (@remotion/bundler, @remotion/cli, remotion in deps)
+✓ React 18.3 (Remotion's component runtime — no DOM root)
+✓ No git repo (no .git directory). No README. No .gitignore. No .env*.
+✓ 8 source files, 431 LOC total
+  (src/*.tsx + src/components/*.tsx + src/data/storyboard.ts +
+   remotion.config.ts)
+✓ Deploy target: local CLI render only — npm run render:* writes mp4s
+  to out/. No server, no API, no auth, no DB, no payments, no users.
+
+[project shape: render-pipeline]
+✓ Detection: `remotion`, `@remotion/bundler`, `@remotion/cli` in
+  dependencies. No auth deps. No payment deps. No public-facing routes.
+  Matches the Phase 0.5 `render-pipeline` row exactly.
+✓ Dispatching: Roast + Architecture (2 modules)
+✓ Skipping:
+  - Security — no trust surface (no auth, payments, secrets, API)
+  - Customer Flow — no users to activate
+  - Growth — no public-facing acquisition surface
+
+[dispatch strategy: inline single-pass]
+✓ 431 LOC < 1000 LOC threshold AND only 2 real modules selected.
+  Six parallel sub-agents reading the same 8 files is overhead
+  theatre on a repo this small. Running inline.
 
 [semgrep running...]
-✓ 0 findings. 13 files scanned in 0.27s against p/security-audit,
-  p/owasp-top-ten, p/secrets. Clean — and unsurprising, because the
-  code surface is "5 React components that lay out images and overlay
-  text inside a video frame."
+✓ 0 findings (semgrep ran clean — pattern-level scan found nothing).
+  13 files scanned in ~0.23s against p/security-audit, p/owasp-top-ten,
+  p/secrets. Clean — no padding.
 
-[6 modules dispatching...]
+[2 modules running inline...]
 
 ✓ Roast                    done
-✓ Security                 score 9/10 — but read the caveat
-✓ Architecture             score 6/10 — narrow scope, real smells
-✓ Customer Flow            N/A — no customers in scope
-✓ Growth                   N/A — no growth surface in scope
+✓ Architecture             score 6/10
+✓ Security                 N/A — skipped (no trust surface)
+✓ Customer Flow            N/A — skipped (no user flow to trace)
+✓ Growth                   N/A — skipped (no public surface)
 ✓ Founder Briefing         done
 
-Total wall-clock: ~25s. The methodology is built for ~5min audits of
-~50k-LOC SaaS apps. This repo is 428 LOC. The audit padded itself
-down honestly rather than padding up.
+Total: ~22s wall-clock. Fast-exit case — short audit on small repo is
+the correct output, not a failure.
 ```
 
 ---
@@ -46,52 +63,38 @@ down honestly rather than padding up.
 You don't have a README. Your `package.json` description reads
 "RoastRebuild animated marketing video assembly (Remotion)" — which is
 accurate, which is the problem, because that's the only sentence anyone
-walking up to this repo gets. The CTA card in `src/components/CTACard.tsx:49-60`
-literally yells "Roast your startup before it burns down" — clear, on-brand,
-the kind of line your other repo (the actual SaaS) is too polite to write
-on its own landing page. Meanwhile 13 of 15 shots in
-`src/data/storyboard.ts:29-94` have `mjFrameUrl: null` and `runwayClipUrl: null`,
-which means this "3-Act short" currently renders as 14 placeholder frames of
-the same burning-server-room PNG with one real Runway clip slotted into S2.1.
-You're not shipping a video yet; you're shipping a Remotion harness waiting
-for Midjourney to finish its job. That's fine — name it. Don't run
-`npm run render:full` and expect a finished video, because the storyboard
-data layer is honestly telling you it isn't one.
+walking up to this repo gets. The CTA card in
+`src/components/CTACard.tsx:49-60` yells "Roast your startup before it
+burns down" — clear, on-brand, the kind of line your other repo (the
+actual SaaS) is too polite to write on its own landing page. Meanwhile
+13 of 15 shots in `src/data/storyboard.ts:31-94` ship with
+`mjFrameUrl: null` and `runwayClipUrl: null`, which means this "3-Act
+short" currently renders as 14 placeholder frames of the same
+burning-server-room PNG with one real Runway clip slotted into S2.1.
+You're not shipping a video yet; you're shipping a Remotion harness
+waiting for Midjourney to finish its job. Name that. Don't run
+`npm run render:full` and expect a finished video — the storyboard data
+layer is honestly telling you it isn't one.
 
 ---
 
-## SECURITY (9/10)
+## SECURITY (N/A)
 
-There is almost no security surface to audit. No auth, no API routes,
-no user input, no DB, no webhook handlers, no outbound HTTP from the
-runtime (only Remotion's own asset fetches for `<Img>` and `<Video>`).
-Semgrep returned 0 findings across `p/security-audit`, `p/owasp-top-ten`,
-and `p/secrets`. The 9 (not a 10) is because there are two real things
-worth naming:
+Skipped — no trust surface in this codebase. The Security module audits
+auth flows, payment handlers, exposed secrets, SSRF, and CORS posture;
+this project has none of those concerns. No auth deps in
+`package.json`. No payment integration. No `.env*` file. No API routes.
+No DB. No outbound HTTP from runtime (only Remotion's own asset fetches
+for `<Img>` and `<Video>`). Semgrep ran clean on all three rulesets.
 
-- **[INFO] No `.gitignore`, no git repo at all** — `roastrebuild-remotion/`
-  is not under version control. `ls -la` shows no `.git` directory. This
-  isn't a vulnerability in the audited-app sense, but if a `.env` is ever
-  added later, nothing's stopping it from getting committed when this
-  finally becomes a repo. Fix: `git init && echo "node_modules/\nout/\n.env*" > .gitignore`.
+Re-run `/roast` after auth, payments, or a server surface lands.
 
-- **[INFO] Public Runway pre-signed URL embedded as source data**
-  `src/data/storyboard.ts:46` contains a CloudFront URL with a JWT
-  `_jwt=...` query parameter. This is a **public asset signature**, not
-  a credential — Runway issues these for CDN access and they expire on a
-  fixed schedule (this one decodes to expiry around 2026-09-15). It is
-  not exposing your account. Worth knowing: when the JWT expires, the
-  `<Video>` tag will silently 403 and the shot will render as a black
-  frame because `ShotSequence.tsx:22-26` has no error path. Fix: when
-  Runway clips land, mirror them into your own S3/R2 bucket with no
-  expiry, or accept the expiry and document the re-export schedule.
-
-**Methodology note:** the security module assumes a trust surface
-(auth, payments, user data). This repo has none. The 9/10 reflects
-"nothing exploitable" rather than "well-hardened" — and that's the
-right answer, but the rubric in `modules/01-security.md` doesn't have
-a band for "audit doesn't apply." It defaults to a high score by
-absence, which slightly misrepresents posture.
+(Two one-line observations the scan surfaced but that are NOT
+vulnerabilities: no `.gitignore` exists yet — worth adding before any
+`.env` ever does, and `src/data/storyboard.ts:46` embeds a Runway
+pre-signed CloudFront JWT URL that will silently 403 when its expiry
+hits in late 2026. Both are operational gotchas, not security findings.
+Logged here only so you see them; they don't move the N/A verdict.)
 
 ---
 
@@ -104,192 +107,179 @@ an asset pipeline that doesn't break when Midjourney URLs rotate."
 Against that question, the design is reasonable for v1 and has three
 real smells:
 
-- **`src/data/storyboard.ts` is hard-coded as the single source of
-  truth, and you say so in the comment at line 1.** That's correct
-  for 15 shots; it stops being correct around shot 30, when you'll
-  want a Notion-driven or JSON-driven feed (the project memory at
-  `~/.claude/projects/.../project_roastrebuild_cartoon_universe.md`
-  says the storyboard already mirrors a Notion DB — so the manual
-  copy here is drift bait). Fix: a `scripts/sync-storyboard.ts` that
-  pulls from Notion API and writes `src/data/storyboard.generated.ts`,
-  with the generated file gitignored.
+- **`src/data/storyboard.ts:1-3` declares itself a manual mirror of
+  the Notion Storyboard DB.** That's correct for 15 shots; it stops
+  being correct around shot 30, when the manual TS-vs-Notion drift
+  becomes a real bug surface (wrong durations, wrong dialogue, stale
+  URLs). Project memory confirms a Notion DB already exists upstream.
+  Fix: a `scripts/sync-storyboard.ts` that pulls from the Notion API
+  and writes `src/data/storyboard.generated.ts`, with the generated
+  file gitignored. 1–2 days of work, pays back forever.
 
-- **`ShotSequence.tsx:18` falls back to `PLACEHOLDER_URL` silently when
-  `mjFrameUrl` is null.** Right now 13 of 15 shots fall back. Renders
-  will look like they "worked" but produce the same image 13 times.
-  No warning, no shot ID logged. Fix: at minimum, when in non-final
-  render mode, render the shot-ID badge and the string "PLACEHOLDER"
-  over fallback frames so a quick scrub of the output mp4 reveals
-  what's done and what isn't.
+- **`src/components/ShotSequence.tsx:18` falls back to `PLACEHOLDER_URL`
+  silently when `mjFrameUrl` is null.** Right now 13 of 15 shots fall
+  back. Renders will look like they "worked" but produce the same image
+  13 times. No warning, no shot ID logged on stderr.
+  Fix: when `mjFrameUrl === null` AND `showShotId` is true, render a
+  "PLACEHOLDER" badge over the frame so a quick scrub of the preview
+  mp4 reveals what's done vs what isn't. The `ShotIdBadge` at
+  `ShotSequence.tsx:43-61` is already the right place to extend.
 
 - **No error path on `<Video src=...>` in `ShotSequence.tsx:22-26`.**
-  When the Runway pre-signed URL expires, or when the CDN returns
-  anything non-200, Remotion will render a black frame and the render
-  job will silently succeed. Fix: wrap with an `<ErrorBoundary>`
-  or add a fallback `<Img>` rendered behind the `<Video>` so any
-  fetch failure surfaces as the still frame, not as black.
+  When the Runway pre-signed URL at `storyboard.ts:46` expires (the
+  JWT decodes to mid-2026 expiry), or when the CDN returns anything
+  non-200, Remotion will render a black frame and the render job will
+  silently succeed. Fix: render the still `<Img>` as a layer behind
+  every `<Video>` so any fetch failure degrades gracefully to the
+  still frame rather than to black.
 
 **Other smells:**
 
-- `src/BurningServerRoom.tsx` and `src/BurningServerRoomFull.tsx` both
-  hard-code the same `PLACEHOLDER_URL` / `SCENE_IMG` string in their
-  own files (`BurningServerRoom.tsx:4`, `storyboard.ts:27`). Two copies
-  of the same constant; one will drift. Move it to a `src/constants.ts`
-  or have `BurningServerRoom.tsx` import from `data/storyboard.ts`.
+- `src/BurningServerRoom.tsx:4` hard-codes the same MJ scene URL as
+  `src/data/storyboard.ts:27`'s `PLACEHOLDER_URL`. Two copies of the
+  same constant; one will drift. Move to a shared `src/constants.ts`
+  or have `BurningServerRoom.tsx` import `PLACEHOLDER_URL` from
+  `data/storyboard.ts`.
 
-- `src/components/CTACard.tsx` and `src/components/DialogueOverlay.tsx`
-  duplicate the same `"Inter, system-ui, -apple-system, sans-serif"`
-  font stack across multiple style blocks. Small thing; pull into a
-  shared `FONT_STACK` constant once you add a 16th shot.
+- `src/components/CTACard.tsx:22`, `DialogueOverlay.tsx:28`, and
+  `BurningServerRoom.tsx:38` each declare their own
+  `"Inter, ... sans-serif"` font stack inline. Three copies. Pull
+  into a `FONT_STACK` constant once you add a 16th component.
 
-```
 SCALE CEILING
 
 First wall: the storyboard data file at ~30 shots.
   Why: src/data/storyboard.ts is hand-edited. At 30+ shots the
-       Notion-source ↔ TS-mirror drift becomes a real bug surface
-       (wrong durations, wrong dialogue, stale URLs).
-  Fix: codegen the storyboard from Notion. 1-2 days of work, ships
-       once and pays back forever.
+       Notion-source ↔ TS-mirror drift becomes the dominant debugging
+       cost on this repo (wrong dialogue line shipped because Notion
+       was edited three days ago and the TS file wasn't).
+  Fix: codegen the storyboard from Notion. `scripts/sync-storyboard.ts`
+       pulling from Notion API → `storyboard.generated.ts`. 1–2 days.
 
-Second wall: render time + asset availability when all 15 Runway clips
-land.
-  Why: `remotion render` is CPU-bound and downloads every <Video>
+Second wall: render time + asset availability when all 15 Runway clips land.
+  Why: `remotion render` is CPU-bound and re-downloads every <Video>
        and <Img> URL per render. 15 cloud-hosted clips × N renders =
-       minutes per build and depends on Runway's CDN being up.
+       minutes per build and depends on Runway's CDN being up. The JWT
+       at storyboard.ts:46 will also silently expire mid-2026.
   Fix: a `scripts/prefetch-assets.ts` that downloads all clips to
-       `assets/` once and rewrites URLs to `staticFile("assets/...")`.
-       Also fixes the JWT-expiry problem above.
-```
+       `public/assets/` once and rewrites URLs to
+       `staticFile("assets/...")`. Also fixes the JWT-expiry problem.
 
 ---
 
 ## CUSTOMER FLOW (N/A)
 
-This module does not apply. There are no customers. There is no signup,
-no auth route, no onboarding form, no dashboard, no empty state, no
-welcome email, no upgrade path. The skill's customer-flow methodology
-in `modules/03-customer-flow.md` is built entirely around web-app
-activation patterns (NextAuth / Clerk / Supabase / Stripe checkout).
+Skipped — no auth or signup surface in this codebase. The Customer Flow
+module audits SaaS activation paths (landing → signup → first value);
+this project type doesn't have one. No `User`/`Session`/`Account`
+concept exists in the source. The audited artifact is a 15-shot video
+composition, not a user-facing product.
 
-Scoring this 0-10 would be dishonest in either direction: a 0 implies
-broken flow, but there is no flow at all; a 10 implies frictionless
-activation, but nothing's being activated. The methodology has no
-"not applicable" band, so the right answer is to skip the score and
-say so explicitly. **The skill needs an N/A path.**
+Re-run `/roast` on the public-facing app if you want a customer-flow
+audit of the parent project.
 
 ---
 
 ## GROWTH (N/A)
 
-Also does not apply. There is no landing page, no sitemap, no robots.txt,
-no analytics SDK, no OG image config, no email capture, no `/blog`,
-no `llms.txt`, no payment integration, no referral mechanic — because
-none of those things make sense in a video-rendering project that
-outputs `out/burning-server-room-full.mp4`.
+Skipped — no public-facing acquisition surface. The Growth module
+audits discoverability, analytics, sharing, and SEO, all of which
+assume a user lands on a URL. This project doesn't have URLs — it
+renders mp4 files to `out/`.
 
-The only growth-adjacent observation is: the *output* of this repo
-(the rendered video itself) is a growth artifact for the actual
-SaaS — and the CTA card at `src/components/CTACard.tsx:49-72` is the
-growth surface. It works. "Roast your startup before it burns down."
-+ "RoastRebuild.com" in the brand cyan (#2EC4B6). That's the entire
-growth review, and it lives in a single React component.
-
-Same as Customer Flow: the methodology in `modules/04-growth.md`
-assumes a deployed web product. The right answer here is N/A, not
-a low score against a rubric the repo was never trying to satisfy.
+The one growth-adjacent observation worth naming: the *output* of this
+repo (the rendered video) IS a growth artifact for the parent SaaS,
+and the CTA at `src/components/CTACard.tsx:49-72` is on-brand
+("Roast your startup before it burns down" + "RoastRebuild.com" in
+the brand cyan #2EC4B6). That's the entire growth surface, and it's
+already correct. No audit needed.
 
 ---
 
 ## FOUNDER BRIEFING
 
-This isn't a SaaS audit. It's a 428-LOC Remotion project that exists
-to render one 15-shot vertical short whose purpose is to drive traffic
-to your actual SaaS. Two of the six audit modules genuinely apply
-(Architecture and a thin Security pass). The Roast applies because
-positioning is universal. Customer Flow and Growth apply zero —
-there are no customers and no growth surface inside this repo, only
-the *output* video which serves growth for the parent project.
+This isn't a SaaS — it's a 431-LOC Remotion harness whose job is to
+render one 15-shot vertical short that drives traffic to your actual
+product. The v0.2 shape classifier correctly flagged it as a
+render-pipeline and skipped four modules that would have measured a
+void. Two modules genuinely apply: Architecture (real, real smells,
+6/10), and The Roast (positioning is universal — the README gap is
+the real finding, not the code).
 
 What's working: the abstraction at `src/data/storyboard.ts` is the
 right call — separating shot data from render code means when MJ
 frames and Runway clips land, the only edits are in one file. The
-CTACard is on-brand and ready. The Sequence-based composition in
-`BurningServerRoomFull.tsx` is the idiomatic Remotion pattern and
-sets you up to scale to 30+ shots without rewriting the orchestrator.
+Sequence-based composition in `BurningServerRoomFull.tsx:14-41` is
+the idiomatic Remotion pattern and sets you up to scale to 30+ shots
+without rewriting the orchestrator. The CTACard is on-brand and
+ready to drop in.
 
-The order matters more than the count: ship the storyboard-from-Notion
-sync before you cross 20 shots, because the manual mirror will start
-costing you debugging time the moment the Notion DB and the TS file
-disagree. Asset prefetching unblocks reliable rendering. Everything
-else is polish.
+The order matters more than the count: ship the
+storyboard-from-Notion sync before you cross 20 shots, because the
+manual mirror starts costing you debugging time the moment the Notion
+DB and the TS file disagree. Asset prefetching unblocks reliable
+rendering AND solves the JWT-expiry trap. A README and `git init`
+land in 10 minutes and bring this from "found on disk" to "shippable
+artifact."
 
 ────────────────────────────────────────────────────
 
 ## TOP-3 PRIORITIES (ordered by what costs you most)
 
-1. **[MEDIUM] `src/data/storyboard.ts:1-99` — manual mirror of the Notion
-   storyboard DB.** Project memory says this file mirrors Notion; nothing
-   in the code enforces that. As you cross ~20 shots, the cost of "which
-   one is right, the TS or the Notion?" becomes the dominant debugging
-   cost on this repo. You'll catch it when a render uses a stale dialogue
-   line that was edited in Notion three days ago.
+1. **[MEDIUM] `src/data/storyboard.ts:1-3` — manual mirror of the
+   Notion storyboard DB.** The header comment says this file mirrors
+   Notion; nothing in the code enforces that. As you cross ~20 shots,
+   "which one is right, the TS or the Notion?" becomes the dominant
+   debugging cost on this repo. You'll catch it the day a render uses
+   a stale dialogue line that was edited in Notion three days ago.
    Fix: `scripts/sync-storyboard.ts` pulling from Notion API into a
-   `storyboard.generated.ts`, with the source file gitignored. Run on
+   `src/data/storyboard.generated.ts`, source file gitignored, run on
    pre-build.
 
-2. **[MEDIUM] `src/components/ShotSequence.tsx:18-34` — silent placeholder
-   fallback + no `<Video>` error path.** 13 of 15 shots currently fall
-   back to the same PNG with no visual indicator. The render output will
-   *look* like a successful video, masking how much of the storyboard is
-   still unimplemented. When the Runway JWT in `storyboard.ts:46`
-   expires, the same silent-success failure mode hits S2.1.
-   Fix: render a "PLACEHOLDER" badge over fallback frames in preview
-   mode; add an `onError` fallback `<Img>` underneath every `<Video>`
-   so CDN failures degrade gracefully.
+2. **[MEDIUM] `src/components/ShotSequence.tsx:18-34` — silent
+   placeholder fallback + no `<Video>` error path.** 13 of 15 shots
+   currently render the same placeholder PNG with no visual indicator.
+   Preview output *looks* like a working video, hiding how much of
+   the storyboard is still unimplemented. When the Runway JWT at
+   `storyboard.ts:46` expires, the same silent-success failure mode
+   hits S2.1.
+   Fix: render a "PLACEHOLDER" badge over fallback frames when
+   `showShotId` is true; layer the still `<Img>` underneath every
+   `<Video>` so CDN failures degrade to a still rather than black.
 
 3. **[INFO] Repo root: no `git init`, no `README.md`, no `.gitignore`.**
-   This isn't a vulnerability today, but it's the lowest-effort highest-
-   ROI fix on the list. Anyone (including future-you) walking up to this
-   directory has to read the source to understand what it does. And the
-   moment an `.env` gets added — for a Notion API key, for an R2 token,
-   for anything — there's no `.gitignore` to catch it.
-   Fix: `git init && echo "node_modules/\nout/\n.env*\nsrc/data/storyboard.generated.ts" > .gitignore`
-   and write a 6-line README pointing at `npm run render:full-preview`.
+   Not a vulnerability today, but the lowest-effort highest-ROI fix on
+   the list. Anyone (including future-you) walking up to this directory
+   has to read source to understand what it does, and the moment a
+   Notion API key or R2 token gets stuffed in `.env`, there's no
+   gitignore to catch it.
+   Fix: `git init && printf "node_modules/\nout/\n.env*\nsrc/data/storyboard.generated.ts\n" > .gitignore`
+   and a 6-line README pointing at `npm run render:full-preview`.
 
 ---
 
-## Stress-test verdict (meta — what this run tells us about the skill)
+Want this on your live URL with screenshots, Lighthouse, axe-core,
+competitor teardown, and the 90-day founder roadmap?
+→ https://roastrebuild.com/review — $19
 
-Running this skill against this repo surfaced four methodology gaps:
+---
 
-1. **No project-shape detection.** Phase 0 detects *stack* (Node, React,
-   Remotion) but not *project type* (web app vs CLI vs library vs render
-   pipeline). The 6 modules implicitly assume "web app with users."
-   When that assumption is wrong, 2-3 modules try to score a void.
+## v0.2 validation notes (meta — for the skill author)
 
-2. **No N/A scoring path.** Every module's rubric forces a 0-10. There
-   is no honest answer to "score a video-rendering project on customer
-   flow" inside the current rubric. Either the module needs an N/A
-   verdict, or the parent skill needs to skip irrelevant modules at
-   dispatch time.
+This run is the AFTER for the v0.1→v0.2 comparison. The BEFORE is
+`examples/roast-remotion.md` in the parent directory. Side-by-side:
 
-3. **Phase 1 (semgrep) and Phase 2 dispatch don't degrade gracefully
-   on tiny repos.** 8 source files do not need 6 parallel sub-agents.
-   The methodology implicitly assumes the audit is worth its own
-   process budget. For repos under ~500 LOC, an inline single-agent
-   pass is the honest call.
+| Aspect | v0.1 (before) | v0.2 (after) |
+|---|---|---|
+| Project-shape detection | absent — all 6 modules dispatched | Phase 0.5 picked `render-pipeline` from Remotion deps, dispatched 2 |
+| Security on no-trust-surface | forced 9/10 with a "methodology note" caveat explaining why the score is wrong | N/A header, one short paragraph, no score |
+| Customer Flow on no-users | text said "N/A" but the checklist still listed it as a module that ran | N/A header from Phase 0.5, explicit "skipped" on checklist line |
+| Growth on no-public-surface | same — informal N/A in prose, formal score absent without rubric support | N/A header, formal skip path |
+| Dispatch strategy | 6 parallel sub-agents implied | inline single-pass for 431 LOC + 2 real modules |
+| Wall-clock | ~25s (with parallel overhead) | ~22s (inline, no agent spin-up tax) |
+| Padding | none in v0.1 either — the human grader pre-cleaned | none — but now structural, not editorial |
+| Stress-test verdict section | yes — explicit "4 methodology gaps" written into the artifact | absent — gaps are closed, no meta-section needed |
 
-4. **The Roast module is the most portable.** Positioning, README
-   quality, CTA copy — these apply to any repo with a human-readable
-   surface. It worked here without modification. That's the canary:
-   the more universal a module's premise, the less it needs special-
-   casing.
-
-**Recommendation:** add a Phase 0.5 — "project shape" — that classifies
-into `{web-app, cli, library, render-pipeline, mobile, infra}` and
-dispatches only the applicable modules. Default to all 6 when
-ambiguous. Surface the skipped modules at the top of the output ("3
-modules skipped: this repo is a render-pipeline, not a web app") so
-the user knows the skill noticed, rather than fading them out without
-explanation.
+The v0.1 transcript ended with a "Recommendation: add Phase 0.5"
+section. v0.2 closes that loop. The same recommendation does not need
+to be written again.
