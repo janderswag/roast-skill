@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.2.0
+version: 0.3.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -90,6 +90,13 @@ echo "[detecting stack...]"
 [ -f Cargo.toml ] && echo "✓ Rust"
 [ -f composer.json ] && echo "✓ PHP"
 [ -f pom.xml ] || [ -f build.gradle ] && echo "✓ JVM"
+[ -f vercel.json ] && echo "✓ Vercel deploy"
+[ -f netlify.toml ] && echo "✓ Netlify deploy"
+[ -f fly.toml ] && echo "✓ Fly.io deploy"
+[ -f railway.toml ] || [ -f railway.json ] && echo "✓ Railway deploy"
+[ -f render.yaml ] && echo "✓ Render deploy"
+[ -f wrangler.toml ] && echo "✓ Cloudflare Workers"
+[ -f Dockerfile ] && echo "✓ Docker (Dockerfile present)"
 [ -d .git ] && echo "✓ Git repo ($(git rev-parse --short HEAD 2>/dev/null || echo 'no commits'))"
 ```
 
@@ -211,7 +218,24 @@ the modules selected in Phase 0.5 using the `Agent` tool in parallel
 OR Phase 0.5 selected ≤3 modules, run the methodology inline in your
 own context instead of dispatching agents. Parallel dispatch on a
 400-LOC repo is overhead theatre — six agents reading the same 8 files
-costs more tokens than reading them once yourself. Estimate LOC with:
+costs more tokens than reading them once yourself.
+
+**Precedence when triggers conflict.** A repo can satisfy BOTH "inline"
+(LOC<1000) AND "parallel" (shape is `web-app` or `marketing-site`).
+When this happens, **the LOC threshold wins — go inline.** Rationale:
+the LOC count is the empirical token-cost driver; shape is intent
+signal. A 600-LOC marketing site doesn't need 6 parallel agents
+re-reading the same 8 files no matter what shape it claims.
+
+**Inline-mode reminder — same hard rules apply.** When running inline,
+the per-finding `path:line` verification rule (read the file before
+citing) is just as critical as in parallel mode. The dispatch template
+restates this for parallel agents; inline mode inherits the SKILL.md
+hard rules but you must still verify every citation. A single
+hallucinated `path:line` kills trust on this skill forever — that's
+true whether you got there via inline or parallel.
+
+Estimate LOC with:
 
 ```bash
 find . -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \

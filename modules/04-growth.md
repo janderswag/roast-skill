@@ -133,6 +133,15 @@ URLs. Re-run /roast on the public-facing app (if any) instead.
 
 Do not score 0-10 in this case.
 
+**Length contract for the N/A section.** Two short paragraphs maximum:
+the first explains why this module is N/A (per the template above);
+the second (optional) may note 1-2 distribution signals the codebase
+does have (e.g. README badges pointing to the project, a docs
+generator in dependencies, a screenshot folder) — but explicitly NOT
+findings. When you include observations, prefix with `Distribution
+observations (not Growth findings):` so the reader can't mistake them
+for scored items.
+
 ## Scoring rubric (0-10) — when a public surface exists
 
 - **10** — Sitemap, robots, OG/Twitter cards on all key routes, JSON-LD

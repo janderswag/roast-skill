@@ -163,6 +163,16 @@ project doesn't have one. Re-run /roast after auth or payments land.
 
 Do not score 0-10 in this case. The N/A is the honest answer.
 
+**Length contract for the N/A section.** Two short paragraphs maximum:
+the first explains why this module is N/A (per the template above);
+the second (optional) may surface up to 2-3 operational observations
+that are real but explicitly NOT security findings (e.g. "no
+`.gitignore` so `.env` files would commit if added", "the Runway JWT
+in the demo config expires in N days — operational note, not a vuln").
+When you include observations, prefix the paragraph with
+`Operational notes (not security findings):` so the reader can't
+mistake them for the absent scored findings.
+
 ## Scoring rubric (0-10) — when trust surface exists
 
 - **10** — Nothing actionable found. Webhooks verified, auth bulletproof,

@@ -124,6 +124,15 @@ or skip this module on subsequent runs.
 
 Do not score 0-10 in this case.
 
+**Length contract for the N/A section.** Two short paragraphs maximum:
+the first explains why this module is N/A (per the template above);
+the second (optional) may note 1-2 things the codebase does have that
+are flow-adjacent (e.g. a contact form, a single CTA button to an
+external SaaS, a placeholder waitlist) — but explicitly NOT findings.
+When you include observations, prefix with `Flow-adjacent observations
+(not Customer Flow findings):` so the reader can't mistake them for
+scored items.
+
 ## Scoring rubric (0-10) — when a user flow exists
 
 - **10** — 1-3 clicks to value. Seeded empty states. Contextual upgrade
