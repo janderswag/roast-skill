@@ -98,7 +98,33 @@ links, empty-state CTAs replacing tours).
    onboarding flow" is not a finding. `components/Onboarding.tsx:88-142`
    is.
 
-## Scoring rubric (0-10)
+## When this module does not apply
+
+If the project has no concept of "users" — no auth, no signup, no
+session, no dashboard — this module should NOT run. There's nothing
+to trace.
+
+Detect "no users" if ALL of the following are true:
+- No auth-library deps (see Security module's list)
+- No `/login`, `/signup`, `/register`, `/auth`, `/api/auth/*` routes
+- No `User`, `Account`, `Session` tables in the DB schema (if a DB
+  exists at all)
+- No middleware that gates routes by user identity
+
+Return format for the no-users case:
+
+```
+CUSTOMER FLOW (N/A — no user flow to trace)
+
+This codebase has no auth or signup surface. The Customer Flow module
+audits SaaS activation paths — landing → signup → first value — and
+this project doesn't have that shape. Re-run /roast after auth lands,
+or skip this module on subsequent runs.
+```
+
+Do not score 0-10 in this case.
+
+## Scoring rubric (0-10) — when a user flow exists
 
 - **10** — 1-3 clicks to value. Seeded empty states. Contextual upgrade
   prompts. OAuth one-click signup. Welcome email + activation drip.

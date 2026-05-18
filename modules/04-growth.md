@@ -106,7 +106,34 @@ or expensive?
 5. **Cite file:line on every concrete finding** (sitemap missing,
    placeholder text in `/docs/getting-started.mdx:14`, etc.).
 
-## Scoring rubric (0-10)
+## When this module does not apply
+
+If the project has **no public-facing acquisition surface** — it's a
+CLI, a library, an internal tool, a render pipeline, or an unhosted
+prototype — this module should NOT run. There's no surface to grow.
+
+Detect "no acquisition surface" if ANY of the following are true:
+- The Phase 0.5 classifier shape is `cli`, `library`, `render-pipeline`,
+  or `infra`
+- No HTML page rendering AT ALL (no `app/page.*`, `pages/index.*`,
+  `src/routes/+page.*`, `index.html`, `index.html.erb`)
+- The README explicitly says "internal tool" or "not for public
+  consumption"
+
+Return format for the no-acquisition-surface case:
+
+```
+GROWTH (N/A — no public surface)
+
+This codebase has no public-facing pages or acquisition surface. The
+Growth module audits discoverability, analytics, sharing, and SEO —
+all of which assume a user lands on a URL. This project doesn't have
+URLs. Re-run /roast on the public-facing app (if any) instead.
+```
+
+Do not score 0-10 in this case.
+
+## Scoring rubric (0-10) — when a public surface exists
 
 - **10** — Sitemap, robots, OG/Twitter cards on all key routes, JSON-LD
   Product/FAQ/Org, analytics wired both client + server, no placeholder

@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.1.0
+version: 0.2.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -77,10 +77,10 @@ their analysis to the right file extensions and frameworks.
 ```bash
 echo "[detecting stack...]"
 [ -f package.json ] && echo "✓ Node / TypeScript / JavaScript"
-[ -f next.config.mjs ] || [ -f next.config.js ] && echo "✓ Next.js"
-[ -f vite.config.ts ] || [ -f vite.config.js ] && echo "✓ Vite"
-[ -f svelte.config.js ] && echo "✓ SvelteKit"
-[ -f astro.config.mjs ] && echo "✓ Astro"
+[ -f next.config.mjs ] || [ -f next.config.js ] || [ -f next.config.ts ] || [ -f next.config.cjs ] && echo "✓ Next.js"
+[ -f vite.config.ts ] || [ -f vite.config.js ] || [ -f vite.config.mjs ] && echo "✓ Vite"
+[ -f svelte.config.js ] || [ -f svelte.config.ts ] && echo "✓ SvelteKit"
+[ -f astro.config.mjs ] || [ -f astro.config.ts ] && echo "✓ Astro"
 [ -f remix.config.js ] && echo "✓ Remix"
 [ -f Gemfile ] && echo "✓ Ruby"
 [ -f config/application.rb ] && echo "✓ Rails"
@@ -110,6 +110,43 @@ Output:
 ✓ <stack and framework lines>
 ✓ <auth / db / payments info>
 ✓ N source files in scope
+```
+
+## Phase 0.5 — Project Shape classification (mandatory)
+
+After stack detection, **classify the project shape** before dispatching
+modules. The skill is designed for SaaS web apps; running every module
+against a CLI or a render-pipeline produces forced low scores on
+categories that genuinely don't apply, which erodes trust.
+
+Pick exactly one shape from the list. When ambiguous, fall back to
+`web-app` (the default, all modules dispatch).
+
+| Shape | How to detect | Modules to dispatch |
+|---|---|---|
+| `web-app` | Has a public-facing UI: framework like Next/Vite/SvelteKit/Astro/Rails/Django, OR `app/page.*` / `pages/index.*` / `src/routes/+page.*` / `src/pages/index.*` exists | All 6 modules |
+| `marketing-site` | `web-app` shape BUT no auth deps (no `next-auth`, `clerk`, `lucia`, `passport`, `supabase-auth`, `iron-session`) AND no payment deps AND no API routes with DB access | All 6, but flag Security and Customer Flow as "minimal-surface" up front |
+| `cli` | Single `bin/` entry, `package.json` `"bin"` field, no UI framework, no public routes | Roast + Architecture + Security only. Skip Customer Flow, Growth |
+| `library` | `package.json` `"main"`/`"exports"` field present + no `bin` + no UI framework + likely has `dist/` | Roast + Architecture + Security only. Skip Customer Flow, Growth |
+| `render-pipeline` | Remotion / Manim / video-rendering deps (`remotion`, `@remotion/*`); no auth/payments/users | Roast + Architecture only. Skip Security, Customer Flow, Growth |
+| `mobile` | `app.json` (Expo), `ios/`, `android/`, React Native deps | Roast + Architecture + Security. Customer Flow + Growth: dispatch with note "mobile context — web growth signals don't apply directly" |
+| `infra` | Mostly `.tf`, `.yaml`, `Dockerfile`, no application source | Security + Architecture only. Skip the rest |
+| `monorepo` | Multiple `package.json` files in `apps/`, `packages/`, or workspaces config | Re-classify per-workspace OR refuse with friendly message ("multi-workspace repo — `cd` into the workspace you want audited and re-run `/roast`") |
+
+Output the classification before Phase 1:
+```
+[project shape: <shape>]
+✓ Dispatching: <module list>
+✓ Skipping: <module list with one-line reason each>
+```
+
+Skipped modules still print a header in the final transcript so the user
+sees what was assessed vs what was deferred. Format for skipped:
+```
+CUSTOMER FLOW (N/A)
+Skipped — no auth or signup surface in this codebase. The Customer
+Flow module audits SaaS activation paths; this project type doesn't
+have one.
 ```
 
 ## Phase 1 — Semgrep ground-truth scan (if installed)
@@ -148,13 +185,44 @@ Output:
 
 Truncate the list to top-10 by severity to keep the output readable.
 
-## Phase 2 — Parallel module dispatch (6 modules)
+**Clean-zero case:** if semgrep returns 0 findings, do NOT pad. Print
+exactly:
 
-Dispatch all 6 modules using the `Agent` tool, **in parallel** (one tool
-call per agent, all in one message). Each agent reads its module file
-from `modules/` and applies the methodology against the current repo.
+```
+✓ 0 findings (semgrep ran clean — pattern-level scan found nothing)
+```
 
-Module files:
+A clean semgrep is a real signal. Don't dilute it with "consider also
+checking X" filler. The downstream Security module gets a "0 semgrep
+findings" note in its prompt and adjusts accordingly.
+
+## Phase 2 — Module dispatch (parallel or inline depending on repo size)
+
+### Dispatch strategy
+
+Pick one based on repo size and shape:
+
+**Parallel dispatch (default for medium+ repos)** — when total source
+LOC > 1000 OR Phase 0.5 shape is `web-app`/`marketing-site`, dispatch
+the modules selected in Phase 0.5 using the `Agent` tool in parallel
+(one tool call per agent, all in one message).
+
+**Inline single-pass (for tiny repos)** — when total source LOC < 1000
+OR Phase 0.5 selected ≤3 modules, run the methodology inline in your
+own context instead of dispatching agents. Parallel dispatch on a
+400-LOC repo is overhead theatre — six agents reading the same 8 files
+costs more tokens than reading them once yourself. Estimate LOC with:
+
+```bash
+find . -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \
+  -o -name '*.jsx' -o -name '*.py' -o -name '*.rb' -o -name '*.go' \
+  -o -name '*.rs' -o -name '*.svelte' -o -name '*.vue' \) \
+  -not -path '*/node_modules/*' -not -path '*/.next/*' \
+  -not -path '*/dist/*' -not -path '*/build/*' \
+  -exec cat {} + 2>/dev/null | wc -l
+```
+
+Module files (referenced by either dispatch strategy):
 - `modules/00-roast.md` — The Roast (namesake brutal paragraph)
 - `modules/01-security.md` — Security + exposed-key scan
 - `modules/02-architecture.md` — Architecture + scale-ceiling review
@@ -162,8 +230,21 @@ Module files:
 - `modules/04-growth.md` — Growth readiness (code-derived)
 - `modules/05-founder-briefing.md` — Founder briefing (synthesis)
 
-Founder briefing waits on the other 5 — dispatch the first 5 in parallel,
-then synthesize via founder-briefing once they complete.
+Founder briefing waits on the other 5 — dispatch the first 5 in parallel
+(or run inline), then synthesize via founder-briefing once they complete.
+
+### Clean-finding case per module
+
+A module that runs against its subject matter and finds nothing real
+should output a short, honest section (1-2 sentences + the score) rather
+than padding. A 4-line Security section reading "Score 9/10. Stripe
+webhook verified, no exposed keys, CORS scoped, rate limits in place"
+is more credible than a 30-line section with 8 padded "consider adding"
+findings.
+
+If the module's subject matter doesn't apply at all to this codebase
+(see Phase 0.5 skip rules), print the `(N/A)` skipped header per the
+Phase 0.5 format and move on — that module did not run.
 
 For each parallel dispatch, the agent prompt template:
 
@@ -279,6 +360,27 @@ TOP-3 PRIORITIES (ordered by what costs you most)
    [description with impact]
    Fix: [one-line action]
 ```
+
+### Fast-exit case (audit completes in under ~30s)
+
+When the project shape is small (`cli`, `library`, `render-pipeline`)
+OR the codebase is tiny (<500 LOC), the audit can complete in 15-30
+seconds with only 2-4 modules' worth of output. That's fine — short
+audits on small repos are correct, not failures.
+
+In the fast-exit case:
+- Keep the same transcript structure (stack detect → semgrep → module
+  checklist → per-module sections → top-3 priorities → upgrade CTA).
+- The module checklist will show some `✓ <Module> (N/A — skipped)`
+  lines from Phase 0.5. That's the explicit honest answer.
+- Top-3 priorities may have fewer than 3 entries if only 2 real
+  findings surfaced. Print exactly what's real — don't pad to 3.
+- "Total: Ns wall-clock" tells the truth (`Total: 22s wall-clock`),
+  the user gets to see they didn't wait for nothing.
+
+A 22-second audit that reports 2 real findings on a 400-LOC repo is
+the right output. A 22-second audit that reports 8 padded findings to
+look thorough is the wrong output.
 
 ## Upgrade CTA
 

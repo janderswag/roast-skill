@@ -132,7 +132,38 @@ bullet list of medium-severity findings without the full explanation.
 Use when there are 4+ mediums to keep the section readable.]
 ```
 
-## Scoring rubric (0-10)
+## When this module does not apply
+
+If the project has **no trust surface** — no auth, no user data, no
+payments, no API receiving user input, no secrets, no public network
+exposure — this module should NOT score itself 10/10 by default.
+Absence-driven high scores misrepresent posture (it's not "secure";
+there's nothing to secure).
+
+Detect "no trust surface" if ALL of the following are true:
+- No auth-library deps in package.json (`next-auth`, `clerk`, `lucia`,
+  `passport`, `supabase-auth`, `iron-session`, `devise`, `django-allauth`,
+  `auth0`, `keycloak`)
+- No payment deps (`stripe`, `@stripe/*`, `@lemonsqueezy/*`, `paddle`)
+- No `.env*` files OR `.env*` files contain only public config (no
+  `*_SECRET`, `*_KEY` patterns)
+- No API routes accept user input (route handler files exist but have
+  no body-parsing or query-parsing for unsanitized user data)
+- No DB layer with user-controlled writes
+
+Return format for the no-trust-surface case:
+
+```
+SECURITY (N/A — no trust surface)
+
+This codebase has no auth, no payment integration, no user-facing API,
+and no secrets. The Security module audits the trust surface; this
+project doesn't have one. Re-run /roast after auth or payments land.
+```
+
+Do not score 0-10 in this case. The N/A is the honest answer.
+
+## Scoring rubric (0-10) — when trust surface exists
 
 - **10** — Nothing actionable found. Webhooks verified, auth bulletproof,
   no exposed secrets, CSP/CORS tight. (Rare. If you give a 10, double-
