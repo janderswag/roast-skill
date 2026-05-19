@@ -2,11 +2,12 @@
 'use strict';
 
 var path = require('path');
+var os = require('os');
 var fs = require('fs');
 var child_process = require('child_process');
 var events = require('events');
 var promises = require('fs/promises');
-var os = require('os');
+var url = require('url');
 
 var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
   get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
@@ -3946,7 +3947,13 @@ var SEVERITY_RANK = {
   low: 1,
   info: 0
 };
-var VerifierNameSchema = z.enum(["semgrep", "gitleaks", "dep-audit"]);
+var VerifierNameSchema = z.enum([
+  "semgrep",
+  "gitleaks",
+  "dep-audit",
+  "live-browser",
+  "live-lighthouse"
+]);
 var FindingSchema = z.object({
   verifier: VerifierNameSchema,
   ruleId: z.string().min(1),
@@ -3998,7 +4005,7 @@ function summarize(findings) {
 }
 
 // src/orchestrator.ts
-var RUNNER_VERSION = "0.4.0";
+var RUNNER_VERSION = "0.5.0";
 var SCHEMA_VERSION = 1;
 async function runOrchestrator(opts) {
   const started = performance.now();
@@ -4008,6 +4015,8 @@ async function runOrchestrator(opts) {
   timer.unref();
   const ctx = {
     cwd: opts.cwd,
+    url: opts.url,
+    cacheDir: opts.cacheDir,
     timeoutMs: opts.timeoutMs,
     signal: controller.signal
   };
@@ -4073,6 +4082,18 @@ async function run(command, args, options) {
   const started = performance.now();
   const stdoutLimit = options.stdoutLimitBytes ?? STDOUT_LIMIT_BYTES;
   const stderrLimit = options.stderrLimitBytes ?? STDERR_LIMIT_BYTES;
+  if (options.signal.aborted) {
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      aborted: true,
+      truncated: { stdout: false, stderr: false },
+      durationMs: Math.round(performance.now() - started)
+    };
+  }
   const child = child_process.spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -4627,18 +4648,567 @@ function lt(a, b) {
 function formatSemVer(v) {
   return `${v[0]}.${v[1]}.${v[2]}`;
 }
+var PLAYWRIGHT_VERSION = "1.47.2";
+var NPM_INSTALL_TIMEOUT_MS = 5 * 6e4;
+var BROWSER_INSTALL_TIMEOUT_MS = 5 * 6e4;
+async function ensurePlaywrightInstalled(opts) {
+  const cacheDir = opts.cacheDir;
+  const playwrightPkgDir = path.join(cacheDir, "node_modules", "playwright-chromium");
+  const browsersDir = path.join(cacheDir, ".browsers");
+  const sentinel = path.join(cacheDir, ".install-complete.v1");
+  if (fs.existsSync(sentinel) && fs.existsSync(path.join(playwrightPkgDir, "package.json")) && fs.existsSync(browsersDir)) {
+    return { ready: true, playwrightPkgDir, browsersDir };
+  }
+  if (opts.signal.aborted) {
+    return { ready: false, playwrightPkgDir, browsersDir, reason: "aborted before install" };
+  }
+  if (!await commandExists("npm", { signal: opts.signal })) {
+    return {
+      ready: false,
+      playwrightPkgDir,
+      browsersDir,
+      reason: "npm not installed \u2014 required for first-time --url install of playwright-chromium"
+    };
+  }
+  opts.onProgress?.(
+    `[first --url run on this machine: installing playwright-chromium@${PLAYWRIGHT_VERSION} + Chromium to ${cacheDir} (~200MB, one-time)]`
+  );
+  try {
+    await promises.mkdir(cacheDir, { recursive: true });
+    await writeMinimalPackageJson(cacheDir);
+    opts.onProgress?.("  step 1/2: npm install playwright-chromium...");
+    const npmResult = await run(
+      "npm",
+      ["install", `playwright-chromium@${PLAYWRIGHT_VERSION}`, "--no-save", "--no-audit", "--no-fund", "--loglevel=error"],
+      { cwd: cacheDir, signal: opts.signal, timeoutMs: NPM_INSTALL_TIMEOUT_MS }
+    );
+    if (npmResult.exitCode !== 0) {
+      return {
+        ready: false,
+        playwrightPkgDir,
+        browsersDir,
+        reason: `npm install failed (exit ${npmResult.exitCode}): ${npmResult.stderr.trim().slice(-500) || npmResult.stdout.trim().slice(-500)}`
+      };
+    }
+    const cliJs = path.join(playwrightPkgDir, "cli.js");
+    if (!fs.existsSync(cliJs)) {
+      return {
+        ready: false,
+        playwrightPkgDir,
+        browsersDir,
+        reason: `playwright-chromium cli.js not found after install at ${cliJs}`
+      };
+    }
+    opts.onProgress?.("  step 2/2: downloading Chromium browser binary...");
+    const browserResult = await run("node", [cliJs, "install", "chromium"], {
+      cwd: cacheDir,
+      signal: opts.signal,
+      timeoutMs: BROWSER_INSTALL_TIMEOUT_MS,
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir }
+    });
+    if (browserResult.exitCode !== 0) {
+      return {
+        ready: false,
+        playwrightPkgDir,
+        browsersDir,
+        reason: `chromium binary download failed (exit ${browserResult.exitCode}): ${browserResult.stderr.trim().slice(-500)}`
+      };
+    }
+    await promises.writeFile(sentinel, (/* @__PURE__ */ new Date()).toISOString(), "utf8");
+    opts.onProgress?.("  \u2713 install complete");
+    return { ready: true, playwrightPkgDir, browsersDir };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ready: false, playwrightPkgDir, browsersDir, reason: msg };
+  }
+}
+async function writeMinimalPackageJson(dir) {
+  const pkgPath = path.join(dir, "package.json");
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const existing = JSON.parse(await promises.readFile(pkgPath, "utf8"));
+      if (existing && typeof existing === "object") return;
+    } catch {
+    }
+  }
+  await promises.writeFile(
+    pkgPath,
+    JSON.stringify({ name: "roast-runner-live-cache", version: "0.0.0", private: true }, null, 2) + "\n",
+    "utf8"
+  );
+}
+
+// src/verifiers/live-browser.ts
+var PAGE_LOAD_TIMEOUT_MS = 45e3;
+var VIEWPORT = { width: 1280, height: 800 };
+var USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 roast-runner/0.5";
+var MAX_AXE_VIOLATIONS_REPORTED = 15;
+var MAX_CONSOLE_ERRORS_REPORTED = 10;
+var MAX_FAILED_REQUESTS_REPORTED = 10;
+var AxeNode = z.object({ target: z.array(z.string()).optional(), html: z.string().optional() }).passthrough();
+var AxeViolation = z.object({
+  id: z.string(),
+  impact: z.enum(["critical", "serious", "moderate", "minor"]).nullable().optional(),
+  help: z.string().optional(),
+  description: z.string().optional(),
+  helpUrl: z.string().optional(),
+  nodes: z.array(AxeNode).optional(),
+  tags: z.array(z.string()).optional()
+}).passthrough();
+var AxeResult = z.object({ violations: z.array(AxeViolation) }).passthrough();
+var liveBrowserVerifier = {
+  name: "live-browser",
+  async isAvailable(ctx) {
+    if (ctx.url === void 0) {
+      return { available: false, reason: "--url not provided" };
+    }
+    return { available: true };
+  },
+  async run(ctx) {
+    const started = performance.now();
+    if (ctx.url === void 0) {
+      return skipped("live-browser", "--url not provided", 0);
+    }
+    const install = await ensurePlaywrightInstalled({
+      cacheDir: ctx.cacheDir,
+      signal: ctx.signal,
+      onProgress: (msg) => process.stderr.write(`${msg}
+`)
+    });
+    if (!install.ready) {
+      return skipped("live-browser", install.reason ?? "playwright install incomplete", Math.round(performance.now() - started));
+    }
+    let browser;
+    try {
+      process.env["PLAYWRIGHT_BROWSERS_PATH"] = install.browsersDir;
+      const pwIndex = path.join(install.playwrightPkgDir, "index.js");
+      if (!fs.existsSync(pwIndex)) {
+        return errored("live-browser", `playwright-chromium entrypoint missing at ${pwIndex}`, Math.round(performance.now() - started));
+      }
+      const mod = await import(url.pathToFileURL(pwIndex).href);
+      const pw = mod.default ?? mod;
+      browser = await pw.chromium.launch({ headless: true, timeout: 3e4 });
+      const browserCtx = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT });
+      const page = await browserCtx.newPage();
+      const consoleErrors = [];
+      const pageErrors = [];
+      const failedRequests = [];
+      let mainResponse = null;
+      page.on("console", (msg) => {
+        const t = msg.type();
+        if (t === "error" || t === "warning") {
+          const loc = msg.location();
+          consoleErrors.push({ type: t, text: msg.text().slice(0, 500), url: loc.url, line: loc.lineNumber });
+        }
+      });
+      page.on("pageerror", (err) => {
+        pageErrors.push({ name: err.name, message: err.message.slice(0, 500) });
+      });
+      page.on("requestfailed", (req) => {
+        const fail = req.failure();
+        if (!fail) return;
+        if (req.resourceType() === "image" && req.url().includes("favicon")) return;
+        failedRequests.push({
+          url: req.url().slice(0, 400),
+          method: req.method(),
+          reason: fail.errorText.slice(0, 200),
+          resourceType: req.resourceType()
+        });
+      });
+      page.on("response", (res) => {
+        if (mainResponse === null) mainResponse = res;
+      });
+      const response = await page.goto(ctx.url, { waitUntil: "networkidle", timeout: PAGE_LOAD_TIMEOUT_MS }).catch(
+        (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`page.goto failed: ${msg}`);
+        }
+      );
+      const finalResponse = response ?? mainResponse;
+      const axeViolations = await runAxe(page).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[live-browser] axe injection/run failed: ${msg}
+`);
+        return [];
+      });
+      const screenshotDir = await captureScreenshots(page, ctx.url).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[live-browser] screenshot failed: ${msg}
+`);
+        return void 0;
+      });
+      const findings = [];
+      const pagePath = pathFromUrl(ctx.url);
+      pushNavigationFinding(findings, pagePath, finalResponse, ctx.url);
+      pushSecurityHeaderFindings(findings, pagePath, finalResponse);
+      pushPageErrorFindings(findings, pagePath, pageErrors);
+      pushConsoleErrorFindings(findings, pagePath, consoleErrors);
+      pushFailedRequestFindings(findings, pagePath, failedRequests);
+      pushAxeFindings(findings, pagePath, axeViolations);
+      if (screenshotDir !== void 0) {
+        process.stderr.write(`[live-browser] screenshots saved: ${screenshotDir}
+`);
+      }
+      return ok("live-browser", findings, Math.round(performance.now() - started));
+    } catch (err) {
+      const elapsed = Math.round(performance.now() - started);
+      const msg = err instanceof Error ? err.message : String(err);
+      return errored("live-browser", msg, elapsed);
+    } finally {
+      await browser?.close().catch(() => void 0);
+    }
+  }
+};
+async function runAxe(page) {
+  const axePath = path.join(__dirname, "axe.min.js");
+  const axeSource = await promises.readFile(axePath, "utf8");
+  await page.addScriptTag({ content: axeSource });
+  const raw = await page.evaluate(`(async () => {
+    if (typeof window.axe === 'undefined') return { violations: [] };
+    const r = await window.axe.run({ resultTypes: ['violations'], runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21a','wcag21aa'] } });
+    return { violations: r.violations };
+  })()`);
+  const parsed = AxeResult.safeParse(raw);
+  return parsed.success ? parsed.data.violations : [];
+}
+async function captureScreenshots(page, url) {
+  const slug = url.replace(/[^a-z0-9]+/gi, "-").slice(0, 60);
+  const dir = path.join(os.tmpdir(), `roast-${Date.now()}-${slug}`);
+  await promises.mkdir(dir, { recursive: true });
+  await page.screenshot({ path: path.join(dir, "viewport.png"), fullPage: false, type: "png" });
+  await page.screenshot({ path: path.join(dir, "fullpage.png"), fullPage: true, type: "png" });
+  return dir;
+}
+function pathFromUrl(u) {
+  try {
+    const parsed = new URL(u);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return u;
+  }
+}
+function pushNavigationFinding(out, path, response, url) {
+  if (response === null) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: "navigation/no-response",
+      severity: "critical",
+      path,
+      message: `no HTTP response received for ${url}`
+    });
+    return;
+  }
+  const status = response.status();
+  if (status >= 500) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: `navigation/http-${status}`,
+      severity: "critical",
+      path,
+      message: `server error on main document: HTTP ${status}`
+    });
+  } else if (status >= 400) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: `navigation/http-${status}`,
+      severity: "high",
+      path,
+      message: `main document returned HTTP ${status}`
+    });
+  }
+}
+var SECURITY_HEADER_CHECKS = [
+  { header: "content-security-policy", severity: "high", fix: "set a CSP header (start with `Content-Security-Policy: default-src 'self'`) to mitigate XSS and data exfiltration" },
+  { header: "strict-transport-security", severity: "medium", fix: "add HSTS: `Strict-Transport-Security: max-age=31536000; includeSubDomains`" },
+  { header: "x-content-type-options", severity: "low", fix: "add `X-Content-Type-Options: nosniff` to block MIME-type sniffing" },
+  { header: "referrer-policy", severity: "low", fix: "set `Referrer-Policy: strict-origin-when-cross-origin` to limit referer leakage" },
+  { header: "x-frame-options", severity: "medium", fix: "add `X-Frame-Options: DENY` or CSP `frame-ancestors` to prevent clickjacking" }
+];
+function pushSecurityHeaderFindings(out, path, response) {
+  if (response === null) return;
+  const headers = response.headers();
+  const lowered = {};
+  for (const [k, v] of Object.entries(headers)) lowered[k.toLowerCase()] = v;
+  for (const check of SECURITY_HEADER_CHECKS) {
+    if (!(check.header in lowered)) {
+      out.push({
+        verifier: "live-browser",
+        ruleId: `security-header/missing/${check.header}`,
+        severity: check.severity,
+        path,
+        message: `missing security header \`${check.header}\` on main document`,
+        fix: check.fix
+      });
+    }
+  }
+}
+function pushPageErrorFindings(out, path, errors) {
+  for (const e of errors.slice(0, MAX_CONSOLE_ERRORS_REPORTED)) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: "js/uncaught-exception",
+      severity: "high",
+      path,
+      message: `uncaught ${e.name}: ${e.message}`
+    });
+  }
+}
+function pushConsoleErrorFindings(out, path, errors) {
+  const onlyErrors = errors.filter((e) => e.type === "error");
+  for (const e of onlyErrors.slice(0, MAX_CONSOLE_ERRORS_REPORTED)) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: "console/error",
+      severity: "medium",
+      path: e.url || path,
+      line: e.line > 0 ? e.line : void 0,
+      message: `console error: ${e.text}`
+    });
+  }
+}
+function pushFailedRequestFindings(out, path, failed) {
+  for (const f of failed.slice(0, MAX_FAILED_REQUESTS_REPORTED)) {
+    out.push({
+      verifier: "live-browser",
+      ruleId: `network/failed/${f.resourceType}`,
+      severity: f.resourceType === "script" || f.resourceType === "stylesheet" ? "high" : "medium",
+      path,
+      message: `${f.method} ${f.url} failed: ${f.reason} (${f.resourceType})`
+    });
+  }
+}
+function pushAxeFindings(out, path, violations) {
+  const sorted = [...violations].sort((a, b) => axeImpactRank(b.impact) - axeImpactRank(a.impact));
+  for (const v of sorted.slice(0, MAX_AXE_VIOLATIONS_REPORTED)) {
+    const impactSev = axeImpactToSeverity(v.impact);
+    const nodes = v.nodes ?? [];
+    const target = nodes[0]?.target?.[0];
+    const evidence = nodes[0]?.html?.slice(0, 200);
+    out.push({
+      verifier: "live-browser",
+      ruleId: `axe/${v.id}`,
+      severity: impactSev,
+      path: target ? `${path} ${target}` : path,
+      message: `a11y: ${v.help ?? v.id}${nodes.length > 1 ? ` (${nodes.length} occurrences)` : ""}`,
+      evidence,
+      fix: v.helpUrl
+    });
+  }
+}
+function axeImpactRank(impact) {
+  switch (impact) {
+    case "critical":
+      return 4;
+    case "serious":
+      return 3;
+    case "moderate":
+      return 2;
+    case "minor":
+      return 1;
+    default:
+      return 0;
+  }
+}
+function axeImpactToSeverity(impact) {
+  switch (impact) {
+    case "critical":
+      return "high";
+    case "serious":
+      return "high";
+    case "moderate":
+      return "medium";
+    case "minor":
+      return "low";
+    default:
+      return "low";
+  }
+}
+
+// src/verifiers/live-lighthouse.ts
+var PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
+var Audit = z.object({
+  id: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  score: z.number().nullable().optional(),
+  displayValue: z.string().optional(),
+  numericValue: z.number().optional(),
+  numericUnit: z.string().optional()
+}).passthrough();
+var Category = z.object({
+  id: z.string().optional(),
+  title: z.string().optional(),
+  score: z.number().nullable().optional()
+}).passthrough();
+var PsiResponse = z.object({
+  lighthouseResult: z.object({
+    finalDisplayedUrl: z.string().optional(),
+    categories: z.object({
+      performance: Category.optional(),
+      accessibility: Category.optional(),
+      "best-practices": Category.optional(),
+      seo: Category.optional()
+    }).passthrough(),
+    audits: z.record(Audit)
+  }).passthrough()
+}).passthrough();
+var liveLighthouseVerifier = {
+  name: "live-lighthouse",
+  async isAvailable(ctx) {
+    if (ctx.url === void 0) {
+      return { available: false, reason: "--url not provided" };
+    }
+    return { available: true };
+  },
+  async run(ctx) {
+    const started = performance.now();
+    if (ctx.url === void 0) {
+      return skipped("live-lighthouse", "--url not provided", 0);
+    }
+    try {
+      const psiUrl = buildPsiUrl(ctx.url, process.env["ROAST_PSI_API_KEY"]);
+      const response = await fetch(psiUrl, {
+        signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(ctx.timeoutMs)]),
+        headers: { "User-Agent": "roast-runner/0.5.0" }
+      });
+      if (!response.ok) {
+        const bodySnippet = (await response.text().catch(() => "")).slice(0, 500);
+        return errored(
+          "live-lighthouse",
+          `PSI returned HTTP ${response.status}${bodySnippet ? `: ${bodySnippet}` : ""}`,
+          Math.round(performance.now() - started)
+        );
+      }
+      const raw = await response.json();
+      const findings = parsePsiResponse(raw, ctx.url);
+      return ok("live-lighthouse", findings, Math.round(performance.now() - started));
+    } catch (err) {
+      const elapsed = Math.round(performance.now() - started);
+      if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+        return errored("live-lighthouse", `aborted or timed out after ${ctx.timeoutMs}ms`, elapsed);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return errored("live-lighthouse", msg, elapsed);
+    }
+  }
+};
+function buildPsiUrl(targetUrl, apiKey) {
+  const u = new URL(PSI_ENDPOINT);
+  u.searchParams.set("url", targetUrl);
+  u.searchParams.set("strategy", "mobile");
+  for (const c of ["performance", "accessibility", "best-practices", "seo"]) {
+    u.searchParams.append("category", c);
+  }
+  if (apiKey && apiKey.length > 0) u.searchParams.set("key", apiKey);
+  return u.toString();
+}
+function parsePsiResponse(raw, targetUrl) {
+  const parsed = PsiResponse.safeParse(raw);
+  if (!parsed.success) return [];
+  const lr = parsed.data.lighthouseResult;
+  const path = pathFromUrl2(targetUrl);
+  const findings = [];
+  pushCategoryFinding(findings, path, "performance", lr.categories.performance?.score);
+  pushCategoryFinding(findings, path, "accessibility", lr.categories.accessibility?.score);
+  pushCategoryFinding(findings, path, "best-practices", lr.categories["best-practices"]?.score);
+  pushCategoryFinding(findings, path, "seo", lr.categories.seo?.score);
+  pushWebVital(findings, path, "largest-contentful-paint", lr.audits["largest-contentful-paint"], 2500, 4e3);
+  pushWebVital(findings, path, "cumulative-layout-shift", lr.audits["cumulative-layout-shift"], 0.1, 0.25);
+  pushWebVital(findings, path, "total-blocking-time", lr.audits["total-blocking-time"], 200, 600);
+  pushWebVital(findings, path, "first-contentful-paint", lr.audits["first-contentful-paint"], 1800, 3e3);
+  return findings;
+}
+function pathFromUrl2(u) {
+  try {
+    const parsed = new URL(u);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return u;
+  }
+}
+function pushCategoryFinding(out, path, category, score, _tags) {
+  if (score === null || score === void 0) return;
+  const pct = Math.round(score * 100);
+  const severity = scoreSeverity(pct);
+  if (severity === null) return;
+  out.push({
+    verifier: "live-lighthouse",
+    ruleId: `lighthouse/category/${category}`,
+    severity,
+    path,
+    message: `Lighthouse ${category} score: ${pct}/100 (${severityLabel(severity)})`,
+    fix: `target \u226590 ${category} score; see roastrebuild.com/review for prioritized fixes`
+  });
+}
+function pushWebVital(out, path, auditId, audit, goodMax, poorMin) {
+  if (!audit || audit.numericValue === void 0) return;
+  const value = audit.numericValue;
+  let severity;
+  let label;
+  if (value <= goodMax) {
+    return;
+  } else if (value >= poorMin) {
+    severity = "high";
+    label = "poor";
+  } else {
+    severity = "medium";
+    label = "needs improvement";
+  }
+  const displayValue = audit.displayValue ?? formatNumeric(value, audit.numericUnit);
+  const goodLabel = formatNumeric(goodMax, audit.numericUnit);
+  out.push({
+    verifier: "live-lighthouse",
+    ruleId: `lighthouse/${auditId}`,
+    severity,
+    path,
+    message: `${audit.title ?? auditId}: ${displayValue} (${label} \u2014 Web Vitals threshold for "good" is ${goodLabel})`
+  });
+}
+function scoreSeverity(pct) {
+  if (pct >= 90) return null;
+  if (pct >= 75) return "low";
+  if (pct >= 50) return "medium";
+  return "high";
+}
+function severityLabel(s) {
+  return s === "high" ? "poor" : s === "medium" ? "needs improvement" : "below target";
+}
+function formatNumeric(value, unit) {
+  if (unit === "millisecond") {
+    return value >= 1e3 ? `${(value / 1e3).toFixed(2)} s` : `${Math.round(value)} ms`;
+  }
+  if (unit === "unitless") return value.toFixed(3);
+  return `${value}${unit ? ` ${unit}` : ""}`;
+}
 
 // src/registry.ts
 var ALL_VERIFIERS = [
   semgrepVerifier,
   gitleaksVerifier,
-  depAuditVerifier
+  depAuditVerifier,
+  liveBrowserVerifier,
+  liveLighthouseVerifier
 ];
 
 // src/cli.ts
-var DEFAULT_TIMEOUT_MS = 12e4;
+var DEFAULT_TIMEOUT_MS = 18e4;
+var DEFAULT_CACHE_DIR = path.join(os.homedir(), ".claude", "skills", "roast", "runner", ".live-cache");
+function parseAndValidateUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`--url is not a valid URL: ${raw}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`--url must use http or https (got ${parsed.protocol})`);
+  }
+  return parsed.toString();
+}
 function parseArgs(argv) {
   let cwd = process.cwd();
+  let url;
+  let cacheDir = DEFAULT_CACHE_DIR;
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   let enabled;
   let help = false;
@@ -4658,6 +5228,20 @@ function parseArgs(argv) {
         const next = argv[i + 1];
         if (next === void 0) throw new Error("--cwd requires a value");
         cwd = path.resolve(next);
+        i += 1;
+        break;
+      }
+      case "--url": {
+        const next = argv[i + 1];
+        if (next === void 0) throw new Error("--url requires a value");
+        url = parseAndValidateUrl(next);
+        i += 1;
+        break;
+      }
+      case "--cache-dir": {
+        const next = argv[i + 1];
+        if (next === void 0) throw new Error("--cache-dir requires a value");
+        cacheDir = path.resolve(next);
         i += 1;
         break;
       }
@@ -4692,19 +5276,24 @@ function parseArgs(argv) {
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { cwd, timeoutMs, enabled, help, version };
+  return { cwd, url, cacheDir, timeoutMs, enabled, help, version };
 }
 function printHelp() {
   process.stdout.write(`roast-runner ${RUNNER_VERSION}
 
 Usage: roast-runner [options]
 
-Runs deterministic verifiers against the current repository and emits a
-normalized JSON RunReport to stdout. Intended to be called by the /roast
-Claude Code skill.
+Runs deterministic verifiers against the current repository (and optionally
+a live URL) and emits a normalized JSON RunReport to stdout. Intended to
+be called by the /roast Claude Code skill.
 
 Options:
   --cwd <path>             Working directory to audit (default: process.cwd())
+  --url <url>              Live URL to audit (enables live-browser + live-lighthouse
+                           verifiers). Passing --url IS the explicit network
+                           opt-in: the runner will make outbound HTTPS calls.
+  --cache-dir <path>       Where to install playwright-chromium on first --url use
+                           (default: ~/.claude/skills/roast/runner/.live-cache)
   --timeout-ms <n>         Global timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})
   --verifiers <list>       Comma-separated subset (default: all)
                            Valid: ${VerifierNameSchema.options.join(", ")}
@@ -4739,10 +5328,20 @@ async function main(argv) {
     return 2;
   }
   try {
+    fs.mkdirSync(args.cacheDir, { recursive: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`failed to create cache dir ${args.cacheDir}: ${msg}
+`);
+    return 2;
+  }
+  try {
     const report = await runOrchestrator({
       cwd: args.cwd,
+      cacheDir: args.cacheDir,
       timeoutMs: args.timeoutMs,
       verifiers: ALL_VERIFIERS,
+      ...args.url !== void 0 ? { url: args.url } : {},
       ...args.enabled !== void 0 ? { enabled: args.enabled } : {}
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}

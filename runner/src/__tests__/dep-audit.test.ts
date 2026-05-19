@@ -7,6 +7,8 @@ import { parseSemVer, minVersionFromSpec, lt, formatSemVer } from '../verifiers/
 
 const ctx = (cwd: string) => ({
   cwd,
+  url: undefined,
+  cacheDir: '/tmp/roast-test-cache',
   timeoutMs: 10_000,
   signal: new AbortController().signal,
 });

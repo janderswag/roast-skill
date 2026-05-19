@@ -1,0 +1,45 @@
+{
+  "lighthouseResult": {
+    "finalDisplayedUrl": "https://example.com/",
+    "categories": {
+      "performance":     { "id": "performance",     "title": "Performance",     "score": 0.42 },
+      "accessibility":   { "id": "accessibility",   "title": "Accessibility",   "score": 0.78 },
+      "best-practices":  { "id": "best-practices",  "title": "Best Practices",  "score": 0.92 },
+      "seo":             { "id": "seo",             "title": "SEO",             "score": 0.88 }
+    },
+    "audits": {
+      "largest-contentful-paint": {
+        "id": "largest-contentful-paint",
+        "title": "Largest Contentful Paint",
+        "score": 0.1,
+        "displayValue": "8.2 s",
+        "numericValue": 8200,
+        "numericUnit": "millisecond"
+      },
+      "cumulative-layout-shift": {
+        "id": "cumulative-layout-shift",
+        "title": "Cumulative Layout Shift",
+        "score": 0.5,
+        "displayValue": "0.15",
+        "numericValue": 0.15,
+        "numericUnit": "unitless"
+      },
+      "total-blocking-time": {
+        "id": "total-blocking-time",
+        "title": "Total Blocking Time",
+        "score": 0.9,
+        "displayValue": "150 ms",
+        "numericValue": 150,
+        "numericUnit": "millisecond"
+      },
+      "first-contentful-paint": {
+        "id": "first-contentful-paint",
+        "title": "First Contentful Paint",
+        "score": 0.5,
+        "displayValue": "2.5 s",
+        "numericValue": 2500,
+        "numericUnit": "millisecond"
+      }
+    }
+  }
+}

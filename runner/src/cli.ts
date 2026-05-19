@@ -1,5 +1,6 @@
-import { resolve } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync, statSync, mkdirSync } from 'node:fs';
 import { runOrchestrator, RUNNER_VERSION } from './orchestrator.js';
 import { ALL_VERIFIERS } from './registry.js';
 import type { VerifierName } from './types.js';
@@ -7,16 +8,34 @@ import { VerifierNameSchema } from './types.js';
 
 interface CliArgs {
   readonly cwd: string;
+  readonly url: string | undefined;
+  readonly cacheDir: string;
   readonly timeoutMs: number;
   readonly enabled: ReadonlySet<VerifierName> | undefined;
   readonly help: boolean;
   readonly version: boolean;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_CACHE_DIR = join(homedir(), '.claude', 'skills', 'roast', 'runner', '.live-cache');
+
+function parseAndValidateUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`--url is not a valid URL: ${raw}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`--url must use http or https (got ${parsed.protocol})`);
+  }
+  return parsed.toString();
+}
 
 function parseArgs(argv: readonly string[]): CliArgs {
   let cwd = process.cwd();
+  let url: string | undefined;
+  let cacheDir = DEFAULT_CACHE_DIR;
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   let enabled: Set<VerifierName> | undefined;
   let help = false;
@@ -37,6 +56,20 @@ function parseArgs(argv: readonly string[]): CliArgs {
         const next = argv[i + 1];
         if (next === undefined) throw new Error('--cwd requires a value');
         cwd = resolve(next);
+        i += 1;
+        break;
+      }
+      case '--url': {
+        const next = argv[i + 1];
+        if (next === undefined) throw new Error('--url requires a value');
+        url = parseAndValidateUrl(next);
+        i += 1;
+        break;
+      }
+      case '--cache-dir': {
+        const next = argv[i + 1];
+        if (next === undefined) throw new Error('--cache-dir requires a value');
+        cacheDir = resolve(next);
         i += 1;
         break;
       }
@@ -72,7 +105,7 @@ function parseArgs(argv: readonly string[]): CliArgs {
     }
   }
 
-  return { cwd, timeoutMs, enabled, help, version };
+  return { cwd, url, cacheDir, timeoutMs, enabled, help, version };
 }
 
 function printHelp(): void {
@@ -80,12 +113,17 @@ function printHelp(): void {
 
 Usage: roast-runner [options]
 
-Runs deterministic verifiers against the current repository and emits a
-normalized JSON RunReport to stdout. Intended to be called by the /roast
-Claude Code skill.
+Runs deterministic verifiers against the current repository (and optionally
+a live URL) and emits a normalized JSON RunReport to stdout. Intended to
+be called by the /roast Claude Code skill.
 
 Options:
   --cwd <path>             Working directory to audit (default: process.cwd())
+  --url <url>              Live URL to audit (enables live-browser + live-lighthouse
+                           verifiers). Passing --url IS the explicit network
+                           opt-in: the runner will make outbound HTTPS calls.
+  --cache-dir <path>       Where to install playwright-chromium on first --url use
+                           (default: ~/.claude/skills/roast/runner/.live-cache)
   --timeout-ms <n>         Global timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})
   --verifiers <list>       Comma-separated subset (default: all)
                            Valid: ${VerifierNameSchema.options.join(', ')}
@@ -121,10 +159,20 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 
   try {
+    mkdirSync(args.cacheDir, { recursive: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`failed to create cache dir ${args.cacheDir}: ${msg}\n`);
+    return 2;
+  }
+
+  try {
     const report = await runOrchestrator({
       cwd: args.cwd,
+      cacheDir: args.cacheDir,
       timeoutMs: args.timeoutMs,
       verifiers: ALL_VERIFIERS,
+      ...(args.url !== undefined ? { url: args.url } : {}),
       ...(args.enabled !== undefined ? { enabled: args.enabled } : {}),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

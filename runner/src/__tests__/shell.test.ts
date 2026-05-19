@@ -45,6 +45,20 @@ describe('run', () => {
     expect(result.exitCode === null || result.exitCode !== 0).toBe(true);
   });
 
+  it('short-circuits when the signal is already aborted at call time', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await run('node', ['-e', 'setTimeout(()=>{}, 60000)'], {
+      cwd: process.cwd(),
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    expect(result.aborted).toBe(true);
+    expect(result.exitCode).toBeNull();
+    // Should be near-instant — we never spawned.
+    expect(result.durationMs).toBeLessThan(100);
+  });
+
   it('responds to external abort signal', async () => {
     const controller = new AbortController();
     const promise = run('node', ['-e', 'setTimeout(()=>{}, 60000)'], {

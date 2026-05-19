@@ -2,8 +2,10 @@ import type { Finding, VerifierName, VerifierResult } from './types.js';
 
 export interface VerifierContext {
   readonly cwd: string;
+  readonly url: string | undefined;
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
+  readonly cacheDir: string;
 }
 
 export interface Verifier {

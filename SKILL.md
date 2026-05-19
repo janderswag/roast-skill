@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.4.0
+version: 0.5.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -57,14 +57,22 @@ dev tools feel like ChatGPT. We are not that.
    or similar, you may detect their *presence* and check `.gitignore`
    coverage, but never read or echo the values.
 
-3. **Never send anything outbound.** Do not use `WebFetch`. Do not POST to
-   any endpoint. This skill is local-only by promise to the user. Permitted
-   external calls are limited to: (a) shelling out to the bundled runner at
+3. **Network egress requires an explicit user opt-in.** Do not use `WebFetch`.
+   Do not POST to any endpoint by default. By default the skill is
+   local-only — findings stay on the user's machine. Permitted local-only
+   calls: (a) the bundled runner at
    `~/.claude/skills/roast/runner/dist/cli.cjs` which orchestrates local
-   verifiers; (b) shelling out to `semgrep` / `gitleaks` directly as fallback
-   — these run offline against local files. (Semgrep may fetch its rule
-   pack from its registry on first use; this is the tool's behavior, not
-   the skill's, and findings never leave the local machine.)
+   verifiers; (b) direct shell-out to `semgrep` / `gitleaks` as fallback.
+   These all run offline against local files (semgrep may fetch its rule
+   pack on first use — tool behavior, not the skill's).
+
+   **`/roast --url <https://...>` IS the explicit opt-in** for outbound
+   network. When `--url` is provided, the runner will: (1) load the URL in
+   a headless Chromium (lazy-installed on first use into
+   `~/.claude/skills/roast/runner/.live-cache/`), and (2) call Google's
+   PageSpeed Insights API at `pagespeedonline.googleapis.com`. Both are
+   logical consequences of "audit my live URL." Never make these calls
+   without `--url`.
 
 4. **Never overwrite files.** This is a read-only audit. No fixes, no
    `Edit`, no `Write`. The paid product has the fix-application pipeline;
@@ -176,15 +184,36 @@ regardless of which tools are installed.
 
 ```bash
 RUNNER="${ROAST_RUNNER:-$HOME/.claude/skills/roast/runner/dist/cli.cjs}"
+RUNNER_ARGS="--cwd $PWD --timeout-ms 180000"
+
+# If the user passed --url <URL>, append it. The runner will then enable
+# the live-browser + live-lighthouse verifiers in addition to local ones.
+if [ -n "$ROAST_URL" ]; then
+  RUNNER_ARGS="$RUNNER_ARGS --url $ROAST_URL"
+fi
+
 if command -v node >/dev/null 2>&1 && [ -f "$RUNNER" ]; then
-  echo "[verifiers running: semgrep + gitleaks + dep-audit...]"
-  node "$RUNNER" --cwd "$PWD" --timeout-ms 120000 2>/tmp/roast-runner.stderr
+  if [ -n "$ROAST_URL" ]; then
+    echo "[verifiers running: semgrep + gitleaks + dep-audit + live-browser + live-lighthouse (live URL: $ROAST_URL)...]"
+  else
+    echo "[verifiers running: semgrep + gitleaks + dep-audit...]"
+  fi
+  node "$RUNNER" $RUNNER_ARGS 2>/tmp/roast-runner.stderr
   RUNNER_EXIT=$?
   if [ $RUNNER_EXIT -ne 0 ]; then
     echo "[runner exited $RUNNER_EXIT — see /tmp/roast-runner.stderr; falling back to inline semgrep]"
   fi
 fi
 ```
+
+When `/roast --url <url>` is invoked, parse the URL from the user's
+arguments and set `ROAST_URL` before constructing the runner command.
+Validate the URL is `http://` or `https://`; reject everything else.
+
+For live-URL audits, surface the screenshot paths printed to stderr by
+live-browser (e.g. `screenshots saved: /tmp/roast-<ts>-<slug>/`) in the
+final output so the user can view them, and offer to read viewport.png /
+fullpage.png with the Read tool if they ask for visual context.
 
 The runner stdout is a JSON `RunReport`. Parse it and read:
 
@@ -243,7 +272,17 @@ Findings still flow into the Security module's prompt.
 
 For each Finding the runner reports, hand it to the right module:
 - `verifier: "semgrep"` or `"gitleaks"` → Security module prompt (Phase 2)
-- `verifier: "dep-audit"` → Security module prompt, but mention "supply-chain" framing
+- `verifier: "dep-audit"` → Security module prompt, "supply-chain" framing
+- `verifier: "live-browser"` (when `--url` provided):
+  - `axe/*` rules → Customer Flow + Growth modules (a11y is a flow + SEO concern)
+  - `security-header/*` rules → Security module
+  - `console/*` + `js/*` rules → Architecture module (runtime bugs)
+  - `network/*` rules → Architecture + Growth modules (broken assets harm SEO)
+- `verifier: "live-lighthouse"` (when `--url` provided):
+  - `lighthouse/category/performance` + Web Vitals → Growth module (CWV impacts SEO + conversion)
+  - `lighthouse/category/accessibility` → Customer Flow module
+  - `lighthouse/category/seo` → Growth module
+  - `lighthouse/category/best-practices` → Architecture module
 - All findings get a one-line summary in the Founder Briefing top-3 if severity ≥ `high`
 
 When the LLM adds findings the verifiers didn't catch, mark them clearly
@@ -479,15 +518,29 @@ installed but the user wants LLM-only findings for comparison).
 `/roast --no-verifiers` — skip Phase 1 entirely (no semgrep, no gitleaks,
 no dep-audit). LLM-only audit, fastest mode, lowest credibility.
 
+`/roast --url <https://...>` — **live-URL mode**. Loads the URL in a
+headless Chromium (lazy-installed ~200MB on first use), captures console
+errors, broken assets, missing security headers, screenshots, and real
+axe-core a11y violations; also calls Google PageSpeed Insights for Core
+Web Vitals + Lighthouse scores. Passing this flag IS the explicit
+network-egress opt-in. Power users may set `ROAST_PSI_API_KEY` for
+higher PSI quota. Localhost and private IPs are allowed (audit your dev
+server before deploying).
+
 ## Important notes for future-you (Claude reading this skill)
 
 - This skill ships in `~/.claude/skills/roast/`. The module files live in
   `~/.claude/skills/roast/modules/*.md`. Reference them by absolute path.
-- The v0.4 verifier runner ships at
+- The v0.4+ verifier runner ships at
   `~/.claude/skills/roast/runner/dist/cli.cjs` (committed bundled CJS).
-  Source is at `runner/src/*` for transparency / PRs. The runner is
-  required-Node-18+ but the SKILL.md gracefully falls back to v0.3
+  `dist/axe.min.js` (~540KB) ships alongside for v0.5's live-browser
+  injection. Source is at `runner/src/*` for transparency / PRs.
+  The runner requires Node 18+; SKILL.md gracefully falls back to v0.3
   inline-semgrep Bash on machines without Node.
+- v0.5 added live-URL mode (`--url <https://...>`). First invocation
+  triggers a one-time ~200MB lazy install of playwright-chromium into
+  `~/.claude/skills/roast/runner/.live-cache/`. Subsequent runs are fast.
+  Screenshots written to `/tmp/roast-<timestamp>-<url-slug>/`.
 - The user may run `/roast` in any repo. Detect the working directory via
   `pwd` and operate relative to it.
 - If the repo has its own CLAUDE.md, read it first — it tells you what

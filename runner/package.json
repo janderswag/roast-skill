@@ -1,6 +1,6 @@
 {
   "name": "@roast-rebuild/runner",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, and dep-audit findings into a normalized JSON shape.",
   "private": true,
   "type": "module",
@@ -20,6 +20,7 @@
     "dist:check": "tsup && git diff --exit-code dist/"
   },
   "dependencies": {
+    "axe-core": "4.10.0",
     "zod": "3.23.8"
   },
   "devDependencies": {

@@ -40,6 +40,19 @@ export async function run(
   const stdoutLimit = options.stdoutLimitBytes ?? STDOUT_LIMIT_BYTES;
   const stderrLimit = options.stderrLimitBytes ?? STDERR_LIMIT_BYTES;
 
+  if (options.signal.aborted) {
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      aborted: true,
+      truncated: { stdout: false, stderr: false },
+      durationMs: Math.round(performance.now() - started),
+    };
+  }
+
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,

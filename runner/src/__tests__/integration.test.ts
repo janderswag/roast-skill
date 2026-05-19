@@ -17,6 +17,8 @@ function isInstalled(cmd: string): boolean {
 
 const ctx = () => ({
   cwd: fixtureDir,
+  url: undefined,
+  cacheDir: '/tmp/roast-test-cache',
   timeoutMs: 60_000,
   signal: new AbortController().signal,
 });
@@ -72,7 +74,13 @@ describe.skipIf(hasGitleaks)('gitleaks absence path', () => {
   it('reports unavailable when gitleaks is not installed', async () => {
     // Use a path with a .git to isolate the "tool missing" branch from the "no .git" branch.
     const repoRoot = join(__dirname, '..', '..', '..');
-    const repoCtx = { cwd: repoRoot, timeoutMs: 5_000, signal: new AbortController().signal };
+    const repoCtx = {
+      cwd: repoRoot,
+      url: undefined,
+      cacheDir: '/tmp/roast-test-cache',
+      timeoutMs: 5_000,
+      signal: new AbortController().signal,
+    };
     const avail = await gitleaksVerifier.isAvailable(repoCtx);
     expect(avail.available).toBe(false);
   });

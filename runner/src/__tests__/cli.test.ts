@@ -89,6 +89,53 @@ describe('cli.main', () => {
     }
   });
 
+  it('rejects malformed --url', async () => {
+    const err = captureStderr();
+    try {
+      const code = await main(['--url', 'not-a-url']);
+      expect(code).toBe(2);
+      expect(err.text()).toMatch(/not a valid URL/);
+    } finally {
+      err.restore();
+    }
+  });
+
+  it('rejects non-http(s) --url protocols', async () => {
+    const err = captureStderr();
+    try {
+      const code = await main(['--url', 'file:///etc/passwd']);
+      expect(code).toBe(2);
+      expect(err.text()).toMatch(/must use http or https/);
+    } finally {
+      err.restore();
+    }
+  });
+
+  it('accepts well-formed http and https URLs', async () => {
+    // We can't actually run --url end-to-end in a unit test without Playwright
+    // installed, but argv parsing should succeed and skip the live verifiers
+    // when their isAvailable() runs. Instead we just confirm arg parsing alone
+    // does not error out for the URL.
+    const err = captureStderr();
+    const out = captureStdout();
+    try {
+      // Use --verifiers dep-audit to avoid actually invoking live-browser/lighthouse here.
+      const fixtureDir = join(__dirname, '..', '..', 'fixtures', 'known-bad');
+      const code = await main([
+        '--cwd', fixtureDir,
+        '--url', 'https://example.com/',
+        '--verifiers', 'dep-audit',
+        '--timeout-ms', '15000',
+      ]);
+      expect(code).toBe(0);
+      const parsed: unknown = JSON.parse(out.text());
+      expect(parsed).toMatchObject({ schemaVersion: 1 });
+    } finally {
+      err.restore();
+      out.restore();
+    }
+  });
+
   it('runs against the known-bad fixture and prints valid JSON to stdout', async () => {
     const out = captureStdout();
     const fixtureDir = join(__dirname, '..', '..', 'fixtures', 'known-bad');

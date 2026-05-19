@@ -33,6 +33,7 @@ describe('runOrchestrator', () => {
   it('produces a schema-valid RunReport', async () => {
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [fakeVerifier('semgrep', 'ok', [baseFinding])],
     });
@@ -49,6 +50,7 @@ describe('runOrchestrator', () => {
     ];
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [fakeVerifier('semgrep', 'ok', findings)],
     });
@@ -61,6 +63,7 @@ describe('runOrchestrator', () => {
   it('marks unavailable verifiers as skipped with reason', async () => {
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [fakeVerifier('semgrep', 'unavailable')],
     });
@@ -72,6 +75,7 @@ describe('runOrchestrator', () => {
   it('captures thrown errors as error status, never propagates', async () => {
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [fakeVerifier('semgrep', 'throw')],
     });
@@ -82,6 +86,7 @@ describe('runOrchestrator', () => {
   it('runs multiple verifiers and sorts results by name', async () => {
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [
         fakeVerifier('semgrep', 'ok'),
@@ -95,6 +100,7 @@ describe('runOrchestrator', () => {
   it('respects the enabled filter', async () => {
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [
         fakeVerifier('semgrep', 'ok'),
@@ -115,6 +121,7 @@ describe('runOrchestrator', () => {
     ];
     const report = await runOrchestrator({
       cwd: process.cwd(),
+      cacheDir: '/tmp/roast-test-cache',
       timeoutMs: 5_000,
       verifiers: [fakeVerifier('semgrep', 'ok', findings)],
     });

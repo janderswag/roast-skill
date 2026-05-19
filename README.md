@@ -66,17 +66,45 @@ Six modules run in parallel, each scored 1–10 with cited evidence:
 6. **Founder briefing (top-3 priorities)** — Synthesizes all 5 modules
    into the three things to fix this week.
 
+## Live-URL mode (v0.5)
+
+```bash
+/roast --url https://your-deploy.com
+```
+
+Adds a real headless-Chromium audit of your production deploy:
+
+- **Console errors + uncaught exceptions** — what's actually breaking in
+  the user's browser, not what should-be-broken in your code
+- **Broken assets / failed requests** — 4xx/5xx from your CDN, scripts
+  that 404, images that never load
+- **Missing security headers** — CSP, HSTS, X-Frame-Options, X-Content-Type-Options,
+  Referrer-Policy on your main document
+- **Real axe-core a11y violations** — runs against the actual rendered
+  DOM, not source-code guesses
+- **Lighthouse Core Web Vitals + scores** — LCP, CLS, TBT, FCP via
+  PageSpeed Insights (Google's API)
+- **Screenshots** — viewport.png + fullpage.png saved to /tmp/
+
+**First run** lazy-installs `playwright-chromium` (~200MB, one-time) to
+`~/.claude/skills/roast/runner/.live-cache/`. Subsequent runs are fast.
+
+**Network egress** for `--url` mode goes to Google's PageSpeed API and to
+the URL you specified. That's it. Without `--url`, the skill is still
+local-only.
+
+**Power users:** set `ROAST_PSI_API_KEY` for higher PSI quota (the
+anonymous shared quota can hit 429 during peak hours).
+
 ## What it doesn't do (this is the free skill)
 
 The full paid audit at https://roastrebuild.com/review adds the things
-that genuinely can't run inside a Claude Code session:
+that still genuinely benefit from server-side processing:
 
-- ❌ Fetch + render your live URL (needs the SSRF-hardened crawler)
-- ❌ Screenshot-driven design audit (needs headless Chromium)
-- ❌ Lighthouse Core Web Vitals (needs PSI API + deployed URL)
-- ❌ Real axe-core a11y findings (runs against rendered HTML)
 - ❌ Competitor teardown (needs web search + competitor fetch)
 - ❌ 90-day founder roadmap (paid-tier synthesis)
+- ❌ SSRF-hardened crawl across multiple pages
+- ❌ Persistent audit history + delta tracking between runs
 
 If you want any of those, that's the $19 audit.
 
@@ -87,13 +115,18 @@ If you want any of those, that's the $19 audit.
 - **Never sees your API key** — runs inside your existing Claude Code
   session and uses that auth. The skill never reads, stores, or
   transmits your Anthropic key.
-- **Zero outbound network calls from the skill** — the audit happens
-  entirely on your machine. No POSTs to roastrebuild.com. The bundled
-  runner is local-only; the only network calls in the pipeline come
-  from `semgrep` itself fetching its rule pack on first use (which is
-  the tool's behavior, not the skill's — findings never leave your
-  machine). Telemetry is off by default; if we add it later, it'll be
-  opt-in and named in install copy.
+- **Zero outbound network calls by default** — without `--url`, the
+  audit happens entirely on your machine. No POSTs to roastrebuild.com.
+  The bundled runner is local-only; the only background network call
+  in default mode is `semgrep` fetching its rule pack on first use
+  (tool behavior, not the skill's — findings never leave your machine).
+- **`--url` is the explicit opt-in for network egress.** Passing
+  `--url <https://...>` IS the consent: the runner then loads the URL
+  in headless Chromium and calls Google's PageSpeed Insights API. Both
+  are logical consequences of "audit my live URL." We never make these
+  calls without `--url`.
+- **Telemetry** is off by default; if we add it later, it'll be opt-in
+  and named in install copy.
 - **Findings stay on your disk** — your code, your repo names, your
   findings — they don't leave your environment.
 

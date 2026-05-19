@@ -3,11 +3,13 @@ import { skipped } from './verifier.js';
 import type { Finding, RunReport, VerifierName, VerifierResult } from './types.js';
 import { SEVERITY_RANK, summarize } from './types.js';
 
-export const RUNNER_VERSION = '0.4.0';
+export const RUNNER_VERSION = '0.5.0';
 export const SCHEMA_VERSION = 1 as const;
 
 export interface OrchestratorOptions {
   readonly cwd: string;
+  readonly url?: string;
+  readonly cacheDir: string;
   readonly timeoutMs: number;
   readonly verifiers: readonly Verifier[];
   readonly enabled?: ReadonlySet<VerifierName>;
@@ -22,6 +24,8 @@ export async function runOrchestrator(opts: OrchestratorOptions): Promise<RunRep
 
   const ctx: VerifierContext = {
     cwd: opts.cwd,
+    url: opts.url,
+    cacheDir: opts.cacheDir,
     timeoutMs: opts.timeoutMs,
     signal: controller.signal,
   };

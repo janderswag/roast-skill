@@ -11,7 +11,13 @@ export const SEVERITY_RANK: Readonly<Record<Severity, number>> = {
   info: 0,
 };
 
-export const VerifierNameSchema = z.enum(['semgrep', 'gitleaks', 'dep-audit']);
+export const VerifierNameSchema = z.enum([
+  'semgrep',
+  'gitleaks',
+  'dep-audit',
+  'live-browser',
+  'live-lighthouse',
+]);
 export type VerifierName = z.infer<typeof VerifierNameSchema>;
 
 export const FindingSchema = z
