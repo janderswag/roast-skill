@@ -1,0 +1,34 @@
+[
+  {
+    "Description": "AWS Access Key",
+    "StartLine": 12,
+    "EndLine": 12,
+    "StartColumn": 14,
+    "EndColumn": 34,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "config.js",
+    "SymlinkFile": "",
+    "Commit": "abc123def4567890abcdef1234567890abcdef12",
+    "Entropy": 3.5,
+    "Author": "Test",
+    "Email": "test@example.com",
+    "Date": "2024-01-01T00:00:00Z",
+    "Message": "add config",
+    "Tags": ["key", "AWS"],
+    "RuleID": "aws-access-token",
+    "Fingerprint": "abc123def4567890abcdef1234567890abcdef12:config.js:aws-access-token:12"
+  },
+  {
+    "Description": "GitHub Personal Access Token",
+    "StartLine": 1,
+    "EndLine": 1,
+    "Match": "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Secret": "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "File": ".env.backup",
+    "Commit": "fedcba9876543210fedcba9876543210fedcba98",
+    "Entropy": 4.2,
+    "RuleID": "github-pat",
+    "Fingerprint": "fedcba9876543210fedcba9876543210fedcba98:.env.backup:github-pat:1"
+  }
+]

@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.3.0
+version: 0.4.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -58,9 +58,13 @@ dev tools feel like ChatGPT. We are not that.
    coverage, but never read or echo the values.
 
 3. **Never send anything outbound.** Do not use `WebFetch`. Do not POST to
-   any endpoint. This skill is local-only by promise to the user. The only
-   network call permitted is shelling out to `semgrep` if installed (which
-   itself runs offline against local files).
+   any endpoint. This skill is local-only by promise to the user. Permitted
+   external calls are limited to: (a) shelling out to the bundled runner at
+   `~/.claude/skills/roast/runner/dist/cli.cjs` which orchestrates local
+   verifiers; (b) shelling out to `semgrep` / `gitleaks` directly as fallback
+   — these run offline against local files. (Semgrep may fetch its rule
+   pack from its registry on first use; this is the tool's behavior, not
+   the skill's, and findings never leave the local machine.)
 
 4. **Never overwrite files.** This is a read-only audit. No fixes, no
    `Edit`, no `Write`. The paid product has the fix-application pipeline;
@@ -156,52 +160,94 @@ Flow module audits SaaS activation paths; this project type doesn't
 have one.
 ```
 
-## Phase 1 — Semgrep ground-truth scan (if installed)
+## Phase 1 — Deterministic verifier scan
 
-Semgrep gives deterministic findings — pattern matches against the actual
-AST, not LLM guesses. This is the trust differentiator over generic
-LLM-only audits.
+Deterministic verifiers give ground-truth findings — pattern matches against
+the actual code, not LLM guesses. This is the trust differentiator over
+generic LLM-only audits.
+
+v0.4 ships a bundled multi-verifier runner: **semgrep** (security AST
+patterns) + **gitleaks** (secrets in git history) + **dep-audit** (known-vuln
+deps via lockfile, all-local, no network). The runner emits a normalized
+JSON `RunReport` (schemaVersion 1) so the LLM modules consume one shape
+regardless of which tools are installed.
+
+### 1a — Preferred path: bundled runner
 
 ```bash
-if command -v semgrep >/dev/null 2>&1; then
-  echo "[semgrep running...]"
-  semgrep --config p/security-audit \
-          --config p/owasp-top-ten \
-          --config p/secrets \
-          --severity ERROR --severity WARNING \
-          --json --quiet --timeout 30 \
-          --exclude node_modules --exclude .next --exclude dist --exclude build \
-          . 2>/dev/null | head -c 200000
-else
-  echo "[semgrep skipped — install with 'brew install semgrep' for ground-truth findings]"
+RUNNER="${ROAST_RUNNER:-$HOME/.claude/skills/roast/runner/dist/cli.cjs}"
+if command -v node >/dev/null 2>&1 && [ -f "$RUNNER" ]; then
+  echo "[verifiers running: semgrep + gitleaks + dep-audit...]"
+  node "$RUNNER" --cwd "$PWD" --timeout-ms 120000 2>/tmp/roast-runner.stderr
+  RUNNER_EXIT=$?
+  if [ $RUNNER_EXIT -ne 0 ]; then
+    echo "[runner exited $RUNNER_EXIT — see /tmp/roast-runner.stderr; falling back to inline semgrep]"
+  fi
 fi
 ```
 
-Parse the JSON. Count findings by severity. For each ERROR finding,
-record `rule_id`, `path`, `line`, and a one-line `message`. These become
-the seed for the Security module (Phase 2). When the LLM adds findings
-that semgrep didn't catch, mark those clearly as LLM-derived; when the
-LLM adopts a semgrep finding, cite the rule_id.
+The runner stdout is a JSON `RunReport`. Parse it and read:
 
-Output:
+- `report.summary` — counts by severity for the top-line "✓ N findings" line
+- `report.results[]` — per-verifier status (`ok` / `skipped` / `error`) and its findings; surface skipped reasons honestly (e.g. *"gitleaks skipped: not a git repository"*)
+- `report.results[].findings[]` — normalized `Finding` objects with `verifier`, `ruleId`, `severity`, `path`, `line`, `message`, `evidence` (redacted), `fix`, `cwe`, `owasp`
+
+Top-line output:
 ```
-✓ 12 findings (2 HIGH, 6 MEDIUM, 4 INFO)
-  HIGH    <rule_id>  <path>:<line>
+✓ N findings (X critical, Y high, Z medium, ...) across <verifiers-that-ran>
+  CRITICAL  <ruleId>  <path>:<line>
+  HIGH      <ruleId>  <path>:<line>
   ...
 ```
 
-Truncate the list to top-10 by severity to keep the output readable.
+Truncate to top-10 by severity for readability.
 
-**Clean-zero case:** if semgrep returns 0 findings, do NOT pad. Print
-exactly:
+**Skipped verifiers** are honest signal, not failure — surface them in
+output. Example: *"dep-audit skipped: no package.json in cwd"* tells the
+user we considered it. Don't hide skips.
 
+**Clean-zero case:** if every verifier ran but reported zero findings,
+print exactly:
 ```
-✓ 0 findings (semgrep ran clean — pattern-level scan found nothing)
+✓ 0 findings (verifiers ran clean — pattern-level scan found nothing)
+```
+A clean run is real signal. Don't pad with "consider also checking X."
+
+### 1b — Fallback: inline semgrep (when node or runner unavailable)
+
+If `node` isn't installed OR the bundled runner is missing OR the runner
+exited non-zero, fall back to the v0.3 inline semgrep scan. Users on
+node-less machines still get a useful roast.
+
+```bash
+if [ -z "$RUNNER_EXIT" ] || [ "$RUNNER_EXIT" -ne 0 ]; then
+  if command -v semgrep >/dev/null 2>&1; then
+    echo "[semgrep running (fallback)...]"
+    semgrep --config p/security-audit \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --severity ERROR --severity WARNING \
+            --json --quiet --timeout 30 \
+            --exclude node_modules --exclude .next --exclude dist --exclude build \
+            . 2>/dev/null | head -c 200000
+  else
+    echo "[semgrep skipped — install with 'brew install semgrep' for ground-truth findings]"
+  fi
+fi
 ```
 
-A clean semgrep is a real signal. Don't dilute it with "consider also
-checking X" filler. The downstream Security module gets a "0 semgrep
-findings" note in its prompt and adjusts accordingly.
+In fallback mode, the LLM consumes raw semgrep JSON directly (same as v0.3).
+Findings still flow into the Security module's prompt.
+
+### Wiring into modules
+
+For each Finding the runner reports, hand it to the right module:
+- `verifier: "semgrep"` or `"gitleaks"` → Security module prompt (Phase 2)
+- `verifier: "dep-audit"` → Security module prompt, but mention "supply-chain" framing
+- All findings get a one-line summary in the Founder Briefing top-3 if severity ≥ `high`
+
+When the LLM adds findings the verifiers didn't catch, mark them clearly
+as LLM-derived; when the LLM adopts a verifier finding, cite the `ruleId`.
 
 ## Phase 2 — Module dispatch (parallel or inline depending on repo size)
 
@@ -430,10 +476,18 @@ output. The audit is the product; the CTA is one line at the end.
 `/roast --no-semgrep` — skip the semgrep step (use when semgrep is
 installed but the user wants LLM-only findings for comparison).
 
+`/roast --no-verifiers` — skip Phase 1 entirely (no semgrep, no gitleaks,
+no dep-audit). LLM-only audit, fastest mode, lowest credibility.
+
 ## Important notes for future-you (Claude reading this skill)
 
 - This skill ships in `~/.claude/skills/roast/`. The module files live in
   `~/.claude/skills/roast/modules/*.md`. Reference them by absolute path.
+- The v0.4 verifier runner ships at
+  `~/.claude/skills/roast/runner/dist/cli.cjs` (committed bundled CJS).
+  Source is at `runner/src/*` for transparency / PRs. The runner is
+  required-Node-18+ but the SKILL.md gracefully falls back to v0.3
+  inline-semgrep Bash on machines without Node.
 - The user may run `/roast` in any repo. Detect the working directory via
   `pwd` and operate relative to it.
 - If the repo has its own CLAUDE.md, read it first — it tells you what

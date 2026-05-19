@@ -1,0 +1,32 @@
+{
+  "name": "@roast-rebuild/runner",
+  "version": "0.4.0",
+  "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, and dep-audit findings into a normalized JSON shape.",
+  "private": true,
+  "type": "module",
+  "main": "dist/cli.cjs",
+  "bin": {
+    "roast-runner": "dist/cli.cjs"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "dist:check": "tsup && git diff --exit-code dist/"
+  },
+  "dependencies": {
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@vitest/coverage-v8": "1.6.0",
+    "tsup": "8.1.0",
+    "typescript": "5.5.3",
+    "vitest": "1.6.0"
+  }
+}

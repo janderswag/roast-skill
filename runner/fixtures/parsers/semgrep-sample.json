@@ -1,0 +1,48 @@
+{
+  "version": "1.50.0",
+  "results": [
+    {
+      "check_id": "javascript.lang.security.detect-eval-with-expression.detect-eval-with-expression",
+      "path": "src/danger.js",
+      "start": { "line": 6, "col": 18 },
+      "end": { "line": 6, "col": 35 },
+      "extra": {
+        "message": "Detected the use of eval. eval() is a dangerous function that can execute arbitrary code if given unsanitized input.",
+        "severity": "ERROR",
+        "lines": "  const result = eval(req.body.code);",
+        "metadata": {
+          "cwe": ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"],
+          "owasp": ["A03:2021 - Injection"]
+        }
+      }
+    },
+    {
+      "check_id": "javascript.express.security.audit.express-open-redirect.express-open-redirect",
+      "path": "src/danger.js",
+      "start": { "line": 12, "col": 3 },
+      "end": { "line": 12, "col": 28 },
+      "extra": {
+        "message": "Express redirect to user-controlled URL — open redirect vulnerability.",
+        "severity": "WARNING",
+        "lines": "  res.redirect(req.query.url);",
+        "metadata": {
+          "cwe": "CWE-601: URL Redirection to Untrusted Site",
+          "owasp": "A01:2021 - Broken Access Control"
+        }
+      }
+    },
+    {
+      "check_id": "generic.secrets.security.detected-aws-access-key-id.detected-aws-access-key-id",
+      "path": "src/leaky.js",
+      "start": { "line": 3, "col": 14 },
+      "end": { "line": 3, "col": 34 },
+      "extra": {
+        "message": "AWS access key ID detected in source.",
+        "severity": "ERROR",
+        "lines": "const KEY = 'AKIAIOSFODNN7EXAMPLE';",
+        "metadata": {}
+      }
+    }
+  ],
+  "errors": []
+}

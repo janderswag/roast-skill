@@ -29,14 +29,34 @@ Then in any repo, in Claude Code:
 
 That's it. No signup, no API key, no telemetry by default.
 
+**Optional but recommended** — install the deterministic verifiers so
+findings are pattern-matched against your code, not just LLM-inferred:
+
+```bash
+brew install semgrep gitleaks   # macOS
+# or: pipx install semgrep && go install github.com/zricethezav/gitleaks/v8@latest
+```
+
+The bundled multi-verifier runner ships pre-built in `runner/dist/cli.cjs`
+and only requires Node 18+ (no `npm install` needed on your side). On
+machines without Node, the skill transparently falls back to v0.3's
+inline semgrep behavior.
+
 ## What you get
 
 Six modules run in parallel, each scored 1–10 with cited evidence:
 
 1. **The Roast** — Brutally honest paragraph in the Technical Simon
    Cowell voice, built for the Twitter screenshot.
-2. **Security + exposed-key scan** — Real semgrep ground-truth findings
-   + LLM analysis for issues semgrep can't model.
+2. **Security + exposed-key scan** — Three deterministic verifiers feed
+   the security module:
+   - **semgrep** — AST pattern matches for OWASP / framework-specific
+     anti-patterns
+   - **gitleaks** — secrets in git history (catches what semgrep misses
+     by scanning past commits)
+   - **dep-audit** — known-vuln deps via your lockfile, plus misplaced
+     build tools, plus missing-lockfile detection (Node only in v0.4)
+   Plus LLM analysis for issues no verifier can model.
 3. **Architecture + scale-ceiling review** — Bottlenecks, where the
    platform breaks at higher load, migration paths.
 4. **Customer flow from source** — Signup, checkout, onboarding paths.
@@ -67,10 +87,13 @@ If you want any of those, that's the $19 audit.
 - **Never sees your API key** — runs inside your existing Claude Code
   session and uses that auth. The skill never reads, stores, or
   transmits your Anthropic key.
-- **Zero outbound network calls** — the audit happens entirely on
-  your machine. No POSTs to roastrebuild.com. Telemetry is off by
-  default; if we add it later, it'll be opt-in and named in install
-  copy.
+- **Zero outbound network calls from the skill** — the audit happens
+  entirely on your machine. No POSTs to roastrebuild.com. The bundled
+  runner is local-only; the only network calls in the pipeline come
+  from `semgrep` itself fetching its rule pack on first use (which is
+  the tool's behavior, not the skill's — findings never leave your
+  machine). Telemetry is off by default; if we add it later, it'll be
+  opt-in and named in install copy.
 - **Findings stay on your disk** — your code, your repo names, your
   findings — they don't leave your environment.
 

@@ -1,0 +1,15 @@
+{
+  "name": "known-bad-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fixture for /roast runner E2E tests. Planted vulnerable deps + misplaced build tools.",
+  "dependencies": {
+    "lodash": "4.17.20",
+    "jsonwebtoken": "^8.5.1",
+    "express": "^4.18.0",
+    "eslint": "^8.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0"
+  }
+}
