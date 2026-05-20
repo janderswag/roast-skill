@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.6.0
+version: 0.7.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -192,6 +192,13 @@ if [ -n "$ROAST_URL" ]; then
   RUNNER_ARGS="$RUNNER_ARGS --url $ROAST_URL"
 fi
 
+# v0.7: pass --delta through to the runner if the user asked for it.
+# The runner reads .roast/last-audit.json, computes the diff against the
+# current run, and emits a one-line `Δ vs previous run: ...` to stderr.
+if [ -n "$ROAST_DELTA" ]; then
+  RUNNER_ARGS="$RUNNER_ARGS --delta"
+fi
+
 if command -v node >/dev/null 2>&1 && [ -f "$RUNNER" ]; then
   if [ -n "$ROAST_URL" ]; then
     echo "[verifiers running: semgrep + gitleaks + dep-audit + live-browser + live-lighthouse (live URL: $ROAST_URL)...]"
@@ -210,6 +217,16 @@ When `/roast --url <url>` is invoked, parse the URL from the user's
 arguments and set `ROAST_URL` before constructing the runner command.
 Validate the URL is `http://` or `https://`; reject everything else.
 
+When `/roast --delta` is invoked, set `ROAST_DELTA=1`. The runner will
+compare against `.roast/last-audit.json` and print a one-line summary
+to stderr. Surface that line in your output to the user verbatim.
+
+When `/roast --triage <sig>=<status>` is invoked, **shell directly to
+the runner with `--triage`** instead of running the audit. The runner
+mutates `.roast/triage.json` and exits — there's no audit work to do.
+Status values: `open`, `fixed`, `wont-fix`, `false-positive`, `uncertain`,
+or `clear` to remove. Echo the runner's JSON receipt to the user.
+
 For live-URL audits, surface the screenshot paths printed to stderr by
 live-browser (e.g. `screenshots saved: /tmp/roast-<ts>-<slug>/`) in the
 final output so the user can view them, and offer to read viewport.png /
@@ -219,7 +236,7 @@ The runner stdout is a JSON `RunReport`. Parse it and read:
 
 - `report.summary` — counts by severity for the top-line "✓ N findings" line
 - `report.results[]` — per-verifier status (`ok` / `skipped` / `error`) and its findings; surface skipped reasons honestly (e.g. *"gitleaks skipped: not a git repository"*)
-- `report.results[].findings[]` — normalized `Finding` objects with `verifier`, `ruleId`, `severity`, `path`, `line`, `message`, `evidence` (redacted), `fix`, `cwe`, `owasp`
+- `report.results[].findings[]` — normalized `Finding` objects with `verifier`, `ruleId`, `severity`, `path`, `line`, `message`, `evidence` (redacted), `fix`, `cwe`, `owasp`, **`signature`** (v0.7: deterministic 16-hex hash for cross-run dedup), **`status`** (v0.7: only set if user has triaged this signature — `wont-fix` / `false-positive` findings should be hidden from the user-facing output by default), and **`trustBoundaries[]`** (v0.7: the boundaries this finding crosses — `auth`, `secrets`, `user-input`, etc. — use these in module narratives to write smarter summaries like "all 3 HIGHs touch the `auth` boundary").
 
 Top-line output:
 ```

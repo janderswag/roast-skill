@@ -2,8 +2,9 @@ import type { Verifier, VerifierContext } from './verifier.js';
 import { skipped } from './verifier.js';
 import type { Finding, RunReport, VerifierName, VerifierResult } from './types.js';
 import { SEVERITY_RANK, summarize } from './types.js';
+import { enrichFinding } from './enrichment.js';
 
-export const RUNNER_VERSION = '0.6.0';
+export const RUNNER_VERSION = '0.7.0';
 export const SCHEMA_VERSION = 1 as const;
 
 export interface OrchestratorOptions {
@@ -35,7 +36,15 @@ export async function runOrchestrator(opts: OrchestratorOptions): Promise<RunRep
     : opts.verifiers;
 
   try {
-    const results = await Promise.all(selected.map((v) => runOne(v, ctx)));
+    const rawResults = await Promise.all(selected.map((v) => runOne(v, ctx)));
+    // Enrich every finding once, at the orchestrator boundary, before any
+    // downstream consumer sees it. Verifiers stay stateless (they don't know
+    // about signatures or trust boundaries); the orchestrator concentrates
+    // cross-cutting concerns in `enrichFinding`. See enrichment.ts.
+    const results: readonly VerifierResult[] = rawResults.map((r) => ({
+      ...r,
+      findings: r.findings.map(enrichFinding),
+    }));
     const allFindings: readonly Finding[] = results.flatMap((r) => r.findings);
     const sortedResults = [...results].sort(byVerifierName);
     return {

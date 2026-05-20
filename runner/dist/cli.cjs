@@ -4,11 +4,11 @@
 var path = require('path');
 var os = require('os');
 var fs = require('fs');
+var crypto = require('crypto');
 var child_process = require('child_process');
 var events = require('events');
 var promises = require('fs/promises');
 var url = require('url');
-var crypto = require('crypto');
 var readline = require('readline');
 var qrcode = require('qrcode-terminal');
 
@@ -3961,6 +3961,26 @@ var VerifierNameSchema = z.enum([
   "live-browser",
   "live-lighthouse"
 ]);
+var FindingStatusSchema = z.enum([
+  "open",
+  "fixed",
+  "wont-fix",
+  "false-positive",
+  "uncertain"
+]);
+var TrustBoundarySchema = z.enum([
+  "user-input",
+  "network",
+  "filesystem",
+  "secrets",
+  "process-exec",
+  "database",
+  "auth",
+  "permissions",
+  "concurrency",
+  "external-api",
+  "serialization"
+]);
 var FindingSchema = z.object({
   verifier: VerifierNameSchema,
   ruleId: z.string().min(1),
@@ -3972,7 +3992,27 @@ var FindingSchema = z.object({
   evidence: z.string().optional(),
   fix: z.string().optional(),
   cwe: z.string().optional(),
-  owasp: z.string().optional()
+  owasp: z.string().optional(),
+  /**
+   * Deterministic hash for cross-run deduplication. Computed from
+   * verifier + ruleId + normalized path + line range. Stable across runs
+   * as long as the verifier rule and file location are stable.
+   *
+   * Optional in the schema for back-compat reading v0.6.0 exports that
+   * predate it; always emitted on findings from v0.7.0+ (set by
+   * orchestrator enrichment).
+   */
+  signature: z.string().min(1).optional(),
+  /**
+   * Lifecycle state. Omitted (treated as "open") for fresh findings.
+   * Hydrated from `.roast/triage.json` on subsequent runs.
+   */
+  status: FindingStatusSchema.optional(),
+  /**
+   * Trust boundaries this finding crosses. Empty/omitted if no mapping
+   * applies for the verifier rule.
+   */
+  trustBoundaries: z.array(TrustBoundarySchema).optional()
 }).strict();
 var VerifierStatusSchema = z.enum(["ok", "skipped", "error"]);
 var VerifierResultSchema = z.object({
@@ -3990,7 +4030,7 @@ var SummarySchema = z.object({
   info: z.number().int().nonnegative(),
   total: z.number().int().nonnegative()
 }).strict();
-z.object({
+var RunReportSchema = z.object({
   schemaVersion: z.literal(1),
   runnerVersion: z.string(),
   cwd: z.string(),
@@ -4010,9 +4050,173 @@ function summarize(findings) {
   }
   return s;
 }
+function computeSignature(input) {
+  const normalizedPath = normalizePath(input.path);
+  const lineToken = input.line !== void 0 ? String(input.line) : "";
+  const endLineToken = input.endLine !== void 0 ? String(input.endLine) : "";
+  const material = `${input.verifier}|${input.ruleId}|${normalizedPath}|${lineToken}|${endLineToken}`;
+  return crypto.createHash("sha256").update(material, "utf8").digest("hex").slice(0, 16);
+}
+function normalizePath(path) {
+  let p = path.replace(/\\/g, "/");
+  if (p.startsWith("./")) p = p.slice(2);
+  while (p.endsWith("/")) p = p.slice(0, -1);
+  return p;
+}
+
+// src/trust-boundaries.ts
+function assignTrustBoundaries(f) {
+  switch (f.verifier) {
+    case "gitleaks":
+      return ["secrets"];
+    case "dep-audit":
+      return ["external-api"];
+    case "semgrep":
+      return assignSemgrepBoundaries(f);
+    case "live-browser":
+      return assignLiveBrowserBoundaries(f);
+    case "live-lighthouse":
+      return ["network"];
+  }
+}
+function assignSemgrepBoundaries(f) {
+  const boundaries = /* @__PURE__ */ new Set();
+  if (f.cwe) {
+    const cweId = extractCweId(f.cwe);
+    for (const b of cweToBoundaries(cweId)) boundaries.add(b);
+  }
+  for (const b of ruleIdToBoundaries(f.ruleId)) boundaries.add(b);
+  return Array.from(boundaries);
+}
+function extractCweId(cweField) {
+  const match = /CWE-(\d+)/i.exec(cweField) ?? /^(\d+)$/.exec(cweField.trim());
+  if (!match) return null;
+  const n = Number.parseInt(match[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+function cweToBoundaries(cwe) {
+  if (cwe === null) return [];
+  switch (cwe) {
+    case 79:
+    case 80:
+    case 116:
+      return ["user-input"];
+    case 89:
+    case 564:
+      return ["user-input", "database"];
+    case 78:
+    case 77:
+    case 94:
+    case 95:
+      return ["user-input", "process-exec"];
+    case 22:
+    case 23:
+    case 73:
+      return ["user-input", "filesystem"];
+    case 352:
+      return ["user-input", "auth"];
+    case 287:
+    case 306:
+    case 384:
+    case 521:
+      return ["auth"];
+    case 285:
+    case 862:
+    case 863:
+    case 732:
+      return ["permissions"];
+    case 798:
+    case 259:
+    case 321:
+      return ["secrets"];
+    case 502:
+    case 915:
+      return ["user-input", "serialization"];
+    case 918:
+      return ["user-input", "network"];
+    case 200:
+    case 209:
+      return ["network"];
+    case 362:
+    case 367:
+    case 366:
+      return ["concurrency"];
+    case 311:
+    case 327:
+    case 326:
+      return ["network", "secrets"];
+    default:
+      return [];
+  }
+}
+function ruleIdToBoundaries(ruleId) {
+  const id = ruleId.toLowerCase();
+  if (id.includes("eval") || id.includes("exec") || id.includes("spawn")) {
+    return ["user-input", "process-exec"];
+  }
+  if (id.includes("sql-injection") || id.includes("sqli") || id.includes("tainted-sql")) {
+    return ["user-input", "database"];
+  }
+  if (id.includes("xss") || id.includes("cross-site-scripting")) {
+    return ["user-input"];
+  }
+  if (id.includes("jwt") || id.includes("auth-") || id.includes("-auth")) {
+    return ["auth"];
+  }
+  if (id.includes("cors") || id.includes("csrf")) {
+    return ["user-input", "auth"];
+  }
+  if (id.includes("ssrf") || id.includes("server-side-request")) {
+    return ["user-input", "network"];
+  }
+  if (id.includes("path-traversal") || id.includes("directory-traversal")) {
+    return ["user-input", "filesystem"];
+  }
+  if (id.includes("secret") || id.includes("hardcoded-credential") || id.includes("api-key")) {
+    return ["secrets"];
+  }
+  if (id.includes("deserialization") || id.includes("unsafe-deserialize")) {
+    return ["user-input", "serialization"];
+  }
+  if (id.includes("crypto") || id.includes("weak-hash") || id.includes("insecure-hash")) {
+    return ["secrets"];
+  }
+  return [];
+}
+function assignLiveBrowserBoundaries(f) {
+  const id = f.ruleId.toLowerCase();
+  if (id.startsWith("axe/")) {
+    return ["user-input"];
+  }
+  if (id.startsWith("security-header/")) {
+    return ["network"];
+  }
+  return [];
+}
+
+// src/enrichment.ts
+function enrichFinding(f) {
+  const needsSignature = f.signature === void 0;
+  const needsBoundaries = f.trustBoundaries === void 0;
+  if (!needsSignature && !needsBoundaries) return f;
+  const next = { ...f };
+  if (needsSignature) {
+    next.signature = computeSignature({
+      verifier: f.verifier,
+      ruleId: f.ruleId,
+      path: f.path,
+      line: f.line,
+      endLine: f.endLine
+    });
+  }
+  if (needsBoundaries) {
+    next.trustBoundaries = [...assignTrustBoundaries(f)];
+  }
+  return next;
+}
 
 // src/orchestrator.ts
-var RUNNER_VERSION = "0.6.0";
+var RUNNER_VERSION = "0.7.0";
 var SCHEMA_VERSION = 1;
 async function runOrchestrator(opts) {
   const started = performance.now();
@@ -4029,7 +4233,11 @@ async function runOrchestrator(opts) {
   };
   const selected = opts.enabled ? opts.verifiers.filter((v) => opts.enabled.has(v.name)) : opts.verifiers;
   try {
-    const results = await Promise.all(selected.map((v) => runOne(v, ctx)));
+    const rawResults = await Promise.all(selected.map((v) => runOne(v, ctx)));
+    const results = rawResults.map((r) => ({
+      ...r,
+      findings: r.findings.map(enrichFinding)
+    }));
     const allFindings = results.flatMap((r) => r.findings);
     const sortedResults = [...results].sort(byVerifierName);
     return {
@@ -5475,6 +5683,170 @@ function printExportCta(input) {
 function indent(text, prefix) {
   return text.split("\n").map((line) => line.length > 0 ? prefix + line : line).join("\n");
 }
+var ROAST_DIR_NAME = ".roast";
+var LAST_AUDIT_FILE = "last-audit.json";
+var TRIAGE_FILE = "triage.json";
+var TriageEntrySchema = z.object({
+  status: FindingStatusSchema,
+  note: z.string().optional(),
+  updatedAt: z.string().datetime()
+}).strict();
+var TriageFileSchema = z.object({
+  schemaVersion: z.literal(1),
+  entries: z.record(z.string().min(1), TriageEntrySchema)
+}).strict();
+var EMPTY_TRIAGE = /* @__PURE__ */ new Map();
+function getRoastDir(cwd) {
+  return path.join(cwd, ROAST_DIR_NAME);
+}
+async function ensureRoastDir(cwd) {
+  const dir = getRoastDir(cwd);
+  await promises.mkdir(dir, { recursive: true });
+  return dir;
+}
+async function loadPreviousRun(cwd) {
+  const path$1 = path.join(getRoastDir(cwd), LAST_AUDIT_FILE);
+  let raw;
+  try {
+    raw = await promises.readFile(path$1, "utf8");
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const validated = RunReportSchema.safeParse(parsed);
+  return validated.success ? validated.data : null;
+}
+async function savePreviousRun(cwd, report) {
+  await ensureRoastDir(cwd);
+  const path$1 = path.join(getRoastDir(cwd), LAST_AUDIT_FILE);
+  await promises.writeFile(path$1, JSON.stringify(report, null, 2), "utf8");
+}
+async function loadTriage(cwd) {
+  const path$1 = path.join(getRoastDir(cwd), TRIAGE_FILE);
+  let raw;
+  try {
+    raw = await promises.readFile(path$1, "utf8");
+  } catch (err) {
+    if (isNotFound(err)) return EMPTY_TRIAGE;
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return EMPTY_TRIAGE;
+  }
+  const validated = TriageFileSchema.safeParse(parsed);
+  if (!validated.success) return EMPTY_TRIAGE;
+  const map = /* @__PURE__ */ new Map();
+  for (const [sig, entry] of Object.entries(validated.data.entries)) {
+    map.set(sig, entry.status);
+  }
+  return map;
+}
+async function setTriageEntry(cwd, signature, status, note) {
+  await ensureRoastDir(cwd);
+  const path$1 = path.join(getRoastDir(cwd), TRIAGE_FILE);
+  let existing = { schemaVersion: 1, entries: {} };
+  try {
+    const raw = await promises.readFile(path$1, "utf8");
+    const parsed = TriageFileSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) existing = parsed.data;
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
+  const entries = { ...existing.entries };
+  if (status === null) {
+    delete entries[signature];
+  } else {
+    entries[signature] = {
+      status,
+      ...{},
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  const next = { schemaVersion: 1, entries };
+  await promises.writeFile(path$1, JSON.stringify(next, null, 2), "utf8");
+}
+function applyTriage(findings, triage) {
+  if (triage.size === 0) return findings;
+  return findings.map((f) => {
+    if (f.signature === void 0) return f;
+    const status = triage.get(f.signature);
+    if (status === void 0) return f;
+    return { ...f, status };
+  });
+}
+function isNotFound(err) {
+  return err !== null && typeof err === "object" && "code" in err && err.code === "ENOENT";
+}
+
+// src/delta.ts
+function computeDelta(current, previous) {
+  const previousBySig = /* @__PURE__ */ new Map();
+  for (const f of previous) {
+    if (f.signature !== void 0) previousBySig.set(f.signature, f);
+  }
+  const newOnes = [];
+  const persisted = [];
+  const regressed = [];
+  const improved = [];
+  const seenSigs = /* @__PURE__ */ new Set();
+  for (const f of current) {
+    if (f.signature === void 0) {
+      newOnes.push({ finding: f });
+      continue;
+    }
+    seenSigs.add(f.signature);
+    const prev = previousBySig.get(f.signature);
+    if (prev === void 0) {
+      newOnes.push({ finding: f });
+      continue;
+    }
+    const prevRank = SEVERITY_RANK[prev.severity];
+    const currRank = SEVERITY_RANK[f.severity];
+    if (currRank > prevRank) {
+      regressed.push({ finding: f, previousSeverity: prev.severity });
+    } else if (currRank < prevRank) {
+      improved.push({ finding: f, previousSeverity: prev.severity });
+    } else {
+      persisted.push({ finding: f, previousSeverity: prev.severity });
+    }
+  }
+  const fixed = [];
+  for (const [sig, f] of previousBySig) {
+    if (!seenSigs.has(sig)) {
+      fixed.push({ finding: f });
+    }
+  }
+  return { new: newOnes, persisted, regressed, improved, fixed };
+}
+function summarizeDelta(delta) {
+  return {
+    new: delta.new.length,
+    persisted: delta.persisted.length,
+    regressed: delta.regressed.length,
+    improved: delta.improved.length,
+    fixed: delta.fixed.length
+  };
+}
+function formatDeltaLine(delta) {
+  const s = summarizeDelta(delta);
+  const parts = [];
+  if (s.new > 0) parts.push(`${s.new} new`);
+  if (s.persisted > 0) parts.push(`${s.persisted} persisted`);
+  if (s.regressed > 0) parts.push(`${s.regressed} regressed`);
+  if (s.improved > 0) parts.push(`${s.improved} improved`);
+  if (s.fixed > 0) parts.push(`${s.fixed} fixed`);
+  if (parts.length === 0) return "\u0394 vs previous run: no changes";
+  return `\u0394 vs previous run: ${parts.join(" \xB7 ")}`;
+}
 
 // src/cli.ts
 var DEFAULT_TIMEOUT_MS = 18e4;
@@ -5491,6 +5863,27 @@ function parseAndValidateUrl(raw) {
   }
   return parsed.toString();
 }
+function parseTriageDirective(raw) {
+  const eqIdx = raw.indexOf("=");
+  if (eqIdx === -1) {
+    throw new Error(`--triage requires <signature>=<status> (got "${raw}")`);
+  }
+  const signature = raw.slice(0, eqIdx).trim();
+  const statusRaw = raw.slice(eqIdx + 1).trim();
+  if (signature.length === 0) {
+    throw new Error("--triage signature cannot be empty");
+  }
+  if (statusRaw === "clear") {
+    return { signature, status: null };
+  }
+  const parsed = FindingStatusSchema.safeParse(statusRaw);
+  if (!parsed.success) {
+    throw new Error(
+      `--triage status must be one of: ${FindingStatusSchema.options.join(", ")}, clear (got "${statusRaw}")`
+    );
+  }
+  return { signature, status: parsed.data };
+}
 function parseArgs(argv) {
   let cwd = process.cwd();
   let url;
@@ -5500,6 +5893,8 @@ function parseArgs(argv) {
   let exportJson = false;
   let exportPath = "./roast.json";
   let exportYes = false;
+  let delta = false;
+  let triage;
   let help = false;
   let version = false;
   for (let i = 0; i < argv.length; i += 1) {
@@ -5577,11 +5972,35 @@ function parseArgs(argv) {
         i += 1;
         break;
       }
+      case "--delta": {
+        delta = true;
+        break;
+      }
+      case "--triage": {
+        const next = argv[i + 1];
+        if (next === void 0) throw new Error("--triage requires <signature>=<status>");
+        triage = parseTriageDirective(next);
+        i += 1;
+        break;
+      }
       default:
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { cwd, url, cacheDir, timeoutMs, enabled, exportJson, exportPath, exportYes, help, version };
+  return {
+    cwd,
+    url,
+    cacheDir,
+    timeoutMs,
+    enabled,
+    exportJson,
+    exportPath,
+    exportYes,
+    delta,
+    triage,
+    help,
+    version
+  };
 }
 function printHelp() {
   process.stdout.write(`roast-runner ${RUNNER_VERSION}
@@ -5609,8 +6028,20 @@ Options:
                            default: ./roast.json)
   --export-yes             Skip the interactive Continue prompt (e.g. for CI).
                            Required when stdin is not a TTY.
+  --delta                  Compare this run against .roast/last-audit.json and
+                           print a one-line summary (new / persisted / regressed /
+                           improved / fixed) to stderr.
+  --triage <sig>=<status>  Mark a finding by signature. Status: ${FindingStatusSchema.options.join(", ")}, clear.
+                           Persists to .roast/triage.json. Runs without the
+                           audit; emits {"triage":"<status>","signature":"..."}.
+                           Example: --triage a3f7c9d2e4b18560=wont-fix
   -h, --help               Print this help
   -v, --version            Print version
+
+State directory:
+  Every successful run writes .roast/last-audit.json (the baseline for --delta)
+  and respects .roast/triage.json (finding signatures \u2192 lifecycle status).
+  Add .roast/ to .gitignore.
 
 Output: JSON RunReport on stdout (schemaVersion 1). Export file on disk if
 --export-json was passed. CTA + preview on stderr.
@@ -5640,6 +6071,9 @@ async function main(argv) {
 `);
     return 2;
   }
+  if (args.triage !== void 0) {
+    return await runTriageSubcommand(args.cwd, args.triage);
+  }
   try {
     fs.mkdirSync(args.cacheDir, { recursive: true });
   } catch (err) {
@@ -5649,7 +6083,7 @@ async function main(argv) {
     return 2;
   }
   try {
-    const report = await runOrchestrator({
+    const rawReport = await runOrchestrator({
       cwd: args.cwd,
       cacheDir: args.cacheDir,
       timeoutMs: args.timeoutMs,
@@ -5657,6 +6091,12 @@ async function main(argv) {
       ...args.url !== void 0 ? { url: args.url } : {},
       ...args.enabled !== void 0 ? { enabled: args.enabled } : {}
     });
+    const triage = await loadTriageOrWarn(args.cwd);
+    const report = applyTriageToReport(rawReport, triage);
+    if (args.delta) {
+      await emitDeltaLine(args.cwd, report);
+    }
+    await savePreviousRunOrWarn(args.cwd, report);
     if (args.exportJson) {
       await handleExport(args, report);
     }
@@ -5666,6 +6106,71 @@ async function main(argv) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`runtime error: ${msg}
+`);
+    return 3;
+  }
+}
+function applyTriageToReport(report, triage) {
+  if (triage.size === 0) return report;
+  const nextResults = report.results.map((r) => ({
+    ...r,
+    findings: applyTriage(r.findings, triage)
+  }));
+  return { ...report, results: nextResults };
+}
+async function loadTriageOrWarn(cwd) {
+  try {
+    return await loadTriage(cwd);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[state] warning: failed to load .roast/triage.json: ${msg}
+`);
+    return /* @__PURE__ */ new Map();
+  }
+}
+async function savePreviousRunOrWarn(cwd, report) {
+  try {
+    await savePreviousRun(cwd, report);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[state] warning: failed to save .roast/last-audit.json: ${msg}
+`);
+  }
+}
+async function emitDeltaLine(cwd, current) {
+  let previous;
+  try {
+    previous = await loadPreviousRun(cwd);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[delta] warning: failed to load .roast/last-audit.json: ${msg}
+`);
+    return;
+  }
+  if (previous === null) {
+    process.stderr.write("[delta] no previous run found at .roast/last-audit.json (first run)\n");
+    return;
+  }
+  const currentFindings = current.results.flatMap((r) => r.findings);
+  const previousFindings = previous.results.flatMap((r) => r.findings);
+  const delta = computeDelta(currentFindings, previousFindings);
+  process.stderr.write(`${formatDeltaLine(delta)}
+`);
+}
+async function runTriageSubcommand(cwd, directive) {
+  try {
+    await setTriageEntry(cwd, directive.signature, directive.status);
+    const receipt = {
+      triage: directive.status ?? "cleared",
+      signature: directive.signature,
+      path: `.roast/triage.json`
+    };
+    process.stdout.write(`${JSON.stringify(receipt)}
+`);
+    return 0;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[triage] failed to update .roast/triage.json: ${msg}
 `);
     return 3;
   }

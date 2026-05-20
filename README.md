@@ -131,6 +131,56 @@ What does NOT get sent:
 - Environment variables, secrets, or credentials
 - Screenshots (stay local in `/tmp/`)
 
+## Delta + triage (v0.7)
+
+Every successful run now writes `.roast/last-audit.json` to your repo
+(add `.roast/` to `.gitignore`). On subsequent runs you can ask the skill
+to compare against the previous run:
+
+```bash
+/roast --delta
+```
+
+Prints a one-line stderr summary like:
+
+```
+Δ vs previous run: 3 new · 12 persisted · 2 regressed · 1 improved · 4 fixed
+```
+
+Findings are matched by a deterministic **signature** (verifier + rule +
+file + line range). The signature is stable across runs even if the
+verifier reworded the message or escalated the severity — so the same
+issue dedupes cleanly.
+
+**Triage individual findings** to suppress them on future runs:
+
+```bash
+/roast --triage a3f7c9d2e4b18560=wont-fix
+/roast --triage a3f7c9d2e4b18560=false-positive
+/roast --triage a3f7c9d2e4b18560=clear    # remove the entry
+```
+
+Statuses: `open`, `fixed`, `wont-fix`, `false-positive`, `uncertain`.
+Persisted to `.roast/triage.json` (also gitignore this if your team
+disagrees on what's a false positive).
+
+## Trust boundaries (v0.7)
+
+Every finding now carries `trustBoundaries[]` — the boundary(s) the
+issue crosses. Eleven boundary tags lifted from the OpenClaw/Clawpatch
+convention:
+
+`user-input`, `network`, `filesystem`, `secrets`, `process-exec`,
+`database`, `auth`, `permissions`, `concurrency`, `external-api`,
+`serialization`
+
+Assigned automatically by the runner from CWE/OWASP metadata (for
+semgrep findings) and per-verifier defaults (gitleaks → `secrets`,
+dep-audit → `external-api`, lighthouse → `network`, axe → `user-input`,
+security-header probes → `network`). The downstream module narratives
+use these tags to write smarter Security findings: "all 5 of your HIGH
+findings touch the `auth` boundary" beats "you have 5 HIGHs."
+
 ## What it doesn't do (this is the free skill)
 
 The full paid audit at https://roastrebuild.com/review adds the things
@@ -139,7 +189,6 @@ that still genuinely benefit from server-side processing:
 - ❌ Competitor teardown (needs web search + competitor fetch)
 - ❌ 90-day founder roadmap (paid-tier synthesis)
 - ❌ SSRF-hardened crawl across multiple pages
-- ❌ Persistent audit history + delta tracking between runs
 
 If you want any of those, that's the $19 audit.
 

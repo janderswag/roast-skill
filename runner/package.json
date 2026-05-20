@@ -1,7 +1,7 @@
 {
   "name": "@roast-rebuild/runner",
-  "version": "0.6.0",
-  "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, and dep-audit findings into a normalized JSON shape.",
+  "version": "0.7.0",
+  "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, dep-audit, axe-core, and Lighthouse findings into a normalized JSON shape. v0.7.0 adds cross-run finding signatures, trust-boundary tagging, and .roast/ local state for --delta + --triage.",
   "private": true,
   "type": "module",
   "main": "dist/cli.cjs",
