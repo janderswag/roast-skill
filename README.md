@@ -96,6 +96,41 @@ local-only.
 **Power users:** set `ROAST_PSI_API_KEY` for higher PSI quota (the
 anonymous shared quota can hit 429 during peak hours).
 
+## Export to the paid audit (v0.6)
+
+```bash
+/roast --url https://your-deploy.com --export-json
+```
+
+Writes a sanitized `roast.json` to your cwd that pre-fills the $19 paid
+audit at roastrebuild.com. The skill prints:
+
+- An interactive preview of EXACTLY what's in the payload before writing
+  (finding counts, redaction counts, "what we'd send / what we'd NOT
+  send" — pass `--export-yes` to skip the prompt in CI)
+- A pre-generated claim code (`RST-XXXXXXXX`)
+- Three upload paths: one-liner `curl`, a terminal QR for mobile, or
+  manual paste at `/resume`
+
+**The skill never uploads on its own.** `roast.json` is written locally;
+you explicitly run `curl` or visit `/resume`. When you pay $19, the
+paid pipeline seeds findings from your skill run and re-validates each
+one server-side (filters out anything that can't be independently
+confirmed — direct response to the LLM-hallucination risk that no
+other free→paid handoff handles).
+
+What gets sent in `roast.json`:
+- Finding rule IDs + severities + one-line messages
+- File basenames + line numbers (NOT full paths)
+- Redacted evidence snippets (max 500 chars, secrets replaced)
+- Project basename + git short-SHA + branch (NOT full cwd)
+
+What does NOT get sent:
+- Full filesystem paths
+- Raw source code beyond 500-char snippets
+- Environment variables, secrets, or credentials
+- Screenshots (stay local in `/tmp/`)
+
 ## What it doesn't do (this is the free skill)
 
 The full paid audit at https://roastrebuild.com/review adds the things

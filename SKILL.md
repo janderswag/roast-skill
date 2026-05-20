@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.5.0
+version: 0.6.0
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer
@@ -491,15 +491,52 @@ A 22-second audit that reports 2 real findings on a 400-LOC repo is
 the right output. A 22-second audit that reports 8 padded findings to
 look thorough is the wrong output.
 
+## Phase 5 — Export (opt-in, when `--export-json` was passed)
+
+If the user invoked `/roast` with `--export-json` (and optionally `--export-yes`
+to skip the interactive prompt), the runner has already written
+`./roast.json` and printed a multi-block CTA to stderr (preview + curl
+one-liner + terminal QR + short-code).
+
+When this happens:
+
+1. **Trust the runner's CTA verbatim — do not re-render or paraphrase it.**
+   It contains the pre-generated claim code, the QR, the exact curl
+   command, and the resume URL. Re-rendering it loses the QR (which is
+   the WOW moment) and risks the user copying a paraphrased curl.
+2. **Append a one-line acknowledgement** in the audit transcript so the
+   user knows the export landed:
+   ```
+   ────────────────────────────────────────────────────
+   ✓ Exported to ./roast.json — see CTA above for upload options.
+     Claim code: RST-XXXXXXXX (expires in 30 days)
+   ```
+3. **Privacy reassurance.** If the user asks "wait what did you send?",
+   read `./roast.json` and walk through the `_privacy` block. The
+   roast.json was written but NEVER auto-uploaded — the user explicitly
+   runs curl or pastes the code.
+
+If `--export-json` was NOT passed, skip Phase 5 entirely and go straight
+to the Upgrade CTA below.
+
+**Hard rule reminder (#3 still applies):** `--export-json` writes a file
+locally. It does NOT upload anything. The user uploads explicitly via
+curl or the resume page. The skill does not POST to roastrebuild.com on
+the user's behalf, ever.
+
 ## Upgrade CTA
 
-After the audit completes, print exactly once at the bottom (no nag,
-no marketing):
+After the audit completes (and, if applicable, Phase 5 export), print
+exactly once at the bottom (no nag, no marketing):
 
 ```
 Want this on your live URL with screenshots, Lighthouse, axe-core,
 competitor teardown, and the 90-day founder roadmap?
 → https://roastrebuild.com/review — $19
+
+(If you ran with --export-json, your roast.json + claim code above
+pre-fills the audit — pay $19 and the paid pipeline seeds findings
+from your skill run instead of starting from zero.)
 ```
 
 Never repeat the upgrade CTA mid-audit. Never inject it into module
@@ -527,6 +564,18 @@ network-egress opt-in. Power users may set `ROAST_PSI_API_KEY` for
 higher PSI quota. Localhost and private IPs are allowed (audit your dev
 server before deploying).
 
+`/roast --export-json` — **export a sanitized `roast.json` to cwd** so the
+user can pre-fill the paid $19 audit at roastrebuild.com. Interactive
+preview before writing (says exactly what's in the payload + what's
+not), refuses to write silently in non-TTY contexts. Includes a
+pre-generated claim code, a terminal QR for `/resume` on mobile, and the
+exact curl one-liner. The skill never auto-uploads — user explicitly
+runs curl or pastes the code. Pair with `--export-yes` to skip the
+interactive prompt (e.g. for CI).
+
+`/roast --export-path <path>` — custom output path for the export
+(implies `--export-json`; default: `./roast.json`).
+
 ## Important notes for future-you (Claude reading this skill)
 
 - This skill ships in `~/.claude/skills/roast/`. The module files live in
@@ -541,6 +590,16 @@ server before deploying).
   triggers a one-time ~200MB lazy install of playwright-chromium into
   `~/.claude/skills/roast/runner/.live-cache/`. Subsequent runs are fast.
   Screenshots written to `/tmp/roast-<timestamp>-<url-slug>/`.
+- v0.6 added the export pipeline (`--export-json`). The runner writes a
+  sanitized `roast.json` (no full paths, no raw source, no secrets — see
+  the `_privacy` block in the file itself), prints an interactive
+  preview before write, and prints a CTA on stderr containing a curl
+  one-liner + terminal QR + short claim code. The runner NEVER uploads
+  on its own — uploading is an explicit user action via curl or the
+  /resume page on roastrebuild.com. Each export pre-generates a
+  `RST-XXXXXXXX` claim code that's deterministic-by-content via
+  sha256(cwd_basename + git_head + skill_version + url) — same project
+  + commit + version upserts the claim instead of fragmenting rows.
 - The user may run `/roast` in any repo. Detect the working directory via
   `pwd` and operate relative to it.
 - If the repo has its own CLAUDE.md, read it first — it tells you what

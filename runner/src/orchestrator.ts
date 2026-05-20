@@ -3,7 +3,7 @@ import { skipped } from './verifier.js';
 import type { Finding, RunReport, VerifierName, VerifierResult } from './types.js';
 import { SEVERITY_RANK, summarize } from './types.js';
 
-export const RUNNER_VERSION = '0.5.0';
+export const RUNNER_VERSION = '0.6.0';
 export const SCHEMA_VERSION = 1 as const;
 
 export interface OrchestratorOptions {

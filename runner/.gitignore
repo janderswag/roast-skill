@@ -2,3 +2,6 @@ node_modules/
 coverage/
 *.tsbuildinfo
 .DS_Store
+
+# Smoke-test export artifacts
+fixtures/**/roast.json

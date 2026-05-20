@@ -8,6 +8,13 @@ var child_process = require('child_process');
 var events = require('events');
 var promises = require('fs/promises');
 var url = require('url');
+var crypto = require('crypto');
+var readline = require('readline');
+var qrcode = require('qrcode-terminal');
+
+function _interopDefault (e) { return e && e.__esModule ? e : { default: e }; }
+
+var qrcode__default = /*#__PURE__*/_interopDefault(qrcode);
 
 var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
   get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
@@ -4005,7 +4012,7 @@ function summarize(findings) {
 }
 
 // src/orchestrator.ts
-var RUNNER_VERSION = "0.5.0";
+var RUNNER_VERSION = "0.6.0";
 var SCHEMA_VERSION = 1;
 async function runOrchestrator(opts) {
   const started = performance.now();
@@ -5189,6 +5196,285 @@ var ALL_VERIFIERS = [
   liveBrowserVerifier,
   liveLighthouseVerifier
 ];
+var GIT_CMD_TIMEOUT_MS = 3e3;
+async function detectGitInfo(cwd, signal) {
+  if (!fs.existsSync(path.join(cwd, ".git"))) {
+    return { isRepo: false, head: null, dirty: false, branch: null };
+  }
+  const [head, dirty, branch] = await Promise.all([
+    getHead(cwd, signal),
+    getDirty(cwd, signal),
+    getBranch(cwd, signal)
+  ]);
+  return { isRepo: true, head, dirty, branch };
+}
+async function getHead(cwd, signal) {
+  try {
+    const r = await run("git", ["rev-parse", "--short", "HEAD"], { cwd, signal, timeoutMs: GIT_CMD_TIMEOUT_MS });
+    if (r.exitCode === 0) {
+      const head = r.stdout.trim();
+      return head.length > 0 ? head : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+async function getDirty(cwd, signal) {
+  try {
+    const r = await run("git", ["status", "--porcelain"], { cwd, signal, timeoutMs: GIT_CMD_TIMEOUT_MS });
+    if (r.exitCode === 0) return r.stdout.trim().length > 0;
+    return false;
+  } catch {
+    return false;
+  }
+}
+async function getBranch(cwd, signal) {
+  try {
+    const r = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, signal, timeoutMs: GIT_CMD_TIMEOUT_MS });
+    if (r.exitCode === 0) {
+      const branch = r.stdout.trim();
+      return branch.length > 0 && branch !== "HEAD" ? branch : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+var CLAIM_PREFIX = "RST-";
+var CLAIM_BODY_LEN = 8;
+function generateClaimCode() {
+  const bytes = crypto.randomBytes(CLAIM_BODY_LEN);
+  let out = CLAIM_PREFIX;
+  for (let i = 0; i < CLAIM_BODY_LEN; i += 1) {
+    out += CROCKFORD[bytes[i] & 31];
+  }
+  return out;
+}
+function computeContentHash(input) {
+  const parts = [
+    path.basename(input.cwd),
+    input.gitHead ?? "no-git",
+    input.gitDirty ? "dirty" : "clean",
+    input.url ?? "local-only",
+    input.skillVersion
+  ];
+  return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
+}
+
+// src/export.ts
+var RESUME_BASE_URL = "https://www.roastrebuild.com";
+var PrivacyBlockSchema = z.object({
+  what_we_send: z.array(z.string()).readonly(),
+  what_we_dont_send: z.array(z.string()).readonly(),
+  finding_count: z.number().int().nonnegative(),
+  file_paths_referenced: z.number().int().nonnegative(),
+  redacted_evidence_count: z.number().int().nonnegative(),
+  snippet_count: z.number().int().nonnegative(),
+  max_snippet_chars: z.number().int().nonnegative()
+}).strict();
+var ClaimMetadataSchema = z.object({
+  claim_code: z.string().regex(/^RST-[0-9A-HJ-NP-TV-Z]{8}$/),
+  content_hash: z.string().regex(/^[0-9a-f]{64}$/),
+  cwd_basename: z.string().min(1),
+  git_head: z.string().nullable(),
+  git_dirty: z.boolean(),
+  git_branch: z.string().nullable(),
+  audit_url: z.string().nullable(),
+  skill_version: z.string(),
+  exported_at: z.string().datetime(),
+  resume_url: z.string().url()
+}).strict();
+z.object({
+  schemaVersion: z.literal(1),
+  _privacy: PrivacyBlockSchema,
+  claim_metadata: ClaimMetadataSchema,
+  summary: SummarySchema,
+  findings: z.array(FindingSchema).readonly(),
+  audit_duration_ms: z.number().int().nonnegative()
+}).strict();
+function buildExportPayload(input) {
+  const findings = collectFindings(input.report);
+  const claimCode = generateClaimCode();
+  const contentHash = computeContentHash({
+    cwd: input.cwd,
+    gitHead: input.git.head,
+    gitDirty: input.git.dirty,
+    url: input.url,
+    skillVersion: RUNNER_VERSION
+  });
+  const cwdBasename = path.basename(input.cwd) || "unknown";
+  const privacy = buildPrivacyBlock(findings, input.url !== void 0);
+  return {
+    schemaVersion: 1,
+    _privacy: privacy,
+    claim_metadata: {
+      claim_code: claimCode,
+      content_hash: contentHash,
+      cwd_basename: cwdBasename,
+      git_head: input.git.head,
+      git_dirty: input.git.dirty,
+      git_branch: input.git.branch,
+      audit_url: input.url ?? null,
+      skill_version: RUNNER_VERSION,
+      exported_at: (/* @__PURE__ */ new Date()).toISOString(),
+      resume_url: `${RESUME_BASE_URL}/resume?c=${claimCode}`
+    },
+    summary: input.report.summary,
+    findings,
+    audit_duration_ms: input.report.durationMs
+  };
+}
+function collectFindings(report) {
+  return report.results.flatMap((r) => r.findings);
+}
+function buildPrivacyBlock(findings, hasUrl) {
+  const pathSet = /* @__PURE__ */ new Set();
+  let redactedEvidence = 0;
+  let snippetCount = 0;
+  let maxSnippetChars = 0;
+  for (const f of findings) {
+    pathSet.add(f.path);
+    if (f.evidence) {
+      snippetCount += 1;
+      maxSnippetChars = Math.max(maxSnippetChars, f.evidence.length);
+      if (f.evidence.includes("[REDACTED:")) redactedEvidence += 1;
+    }
+  }
+  const whatWeSend = [
+    "finding rule IDs, severities, and one-line messages",
+    "file paths referenced (basenames + relative paths) and line numbers",
+    "redacted evidence snippets (max 500 chars; secrets replaced with [REDACTED:len=N])",
+    "project basename + git short-SHA + branch (NOT full paths)"
+  ];
+  if (hasUrl) whatWeSend.push("the URL you passed to --url (host + pathname)");
+  const whatWeDont = [
+    "no full filesystem paths (only basename of cwd)",
+    "no raw source code beyond <=500-char evidence snippets",
+    "no environment variables, secrets, or credentials",
+    "no screenshots (kept local in /tmp/, never uploaded)",
+    "no authentication, no API keys, no telemetry"
+  ];
+  return {
+    what_we_send: whatWeSend,
+    what_we_dont_send: whatWeDont,
+    finding_count: findings.length,
+    file_paths_referenced: pathSet.size,
+    redacted_evidence_count: redactedEvidence,
+    snippet_count: snippetCount,
+    max_snippet_chars: maxSnippetChars
+  };
+}
+async function writeExportPayload(payload, outPath) {
+  const absolutePath = path.resolve(outPath);
+  const serialized = JSON.stringify(payload, null, 2);
+  await promises.writeFile(absolutePath, serialized, "utf8");
+  return { bytesWritten: Buffer.byteLength(serialized, "utf8"), absolutePath };
+}
+var SEPARATOR = "\u2500".repeat(60);
+async function runPreview(payload, opts) {
+  printPreview(payload, opts.outPath);
+  if (opts.assumeYes) {
+    process.stderr.write("  \u2192 --export-yes flag passed; skipping interactive confirmation\n\n");
+    return { proceed: true };
+  }
+  if (!process.stdin.isTTY) {
+    return {
+      proceed: false,
+      reason: "stdin is not a TTY and --export-yes was not passed; refusing to write silently. Re-run with --export-yes to bypass the prompt."
+    };
+  }
+  const answer = await askYesNo("Continue? [y/N]: ");
+  process.stderr.write("\n");
+  return answer ? { proceed: true } : { proceed: false, reason: "user declined export" };
+}
+function printPreview(payload, outPath) {
+  const p = payload._privacy;
+  const lines = [
+    "",
+    SEPARATOR,
+    `  Ready to export roast.json \u2192 ${outPath}`,
+    SEPARATOR,
+    "",
+    "  What we'd send to roastrebuild.com:",
+    `    ${pad(p.finding_count)} findings`,
+    `    ${pad(p.file_paths_referenced)} file paths (basenames + line numbers only)`,
+    `    ${pad(p.redacted_evidence_count)} redacted secret evidence snippets`,
+    `    ${pad(p.snippet_count)} code evidence snippets (max ${p.max_snippet_chars} chars each)`,
+    "",
+    "  What we'd NOT send:"
+  ];
+  for (const item of p.what_we_dont_send) {
+    lines.push(`    \u2717 ${item}`);
+  }
+  lines.push("");
+  lines.push(`  Claim code (pre-generated): ${payload.claim_metadata.claim_code}`);
+  lines.push(`  Audit URL: ${payload.claim_metadata.audit_url ?? "local-only (no --url)"}`);
+  if (payload.claim_metadata.git_head !== null) {
+    lines.push(`  Git: ${payload.claim_metadata.git_head}${payload.claim_metadata.git_dirty ? " (dirty)" : ""}${payload.claim_metadata.git_branch ? ` on ${payload.claim_metadata.git_branch}` : ""}`);
+  }
+  lines.push("");
+  lines.push(SEPARATOR);
+  lines.push("");
+  process.stderr.write(lines.join("\n"));
+}
+function pad(n) {
+  return n.toString().padStart(4, " ");
+}
+async function askYesNo(prompt) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await new Promise((res) => rl.question(prompt, res));
+    const lower = answer.trim().toLowerCase();
+    return lower === "y" || lower === "yes";
+  } finally {
+    rl.close();
+  }
+}
+var SEPARATOR2 = "\u2500".repeat(60);
+var FROM_SKILL_ENDPOINT = "https://www.roastrebuild.com/api/audit/from-skill";
+function printExportCta(input) {
+  const sizeKb = (input.bytesWritten / 1024).toFixed(1);
+  const code = input.payload.claim_metadata.claim_code;
+  const resumeUrl = input.payload.claim_metadata.resume_url;
+  const header = [
+    "",
+    SEPARATOR2,
+    `  \u2713 Exported to ${input.absolutePath} (${sizeKb} KB)`,
+    "",
+    `  Your claim code: ${code}`,
+    "  Expires in 30 days.",
+    SEPARATOR2,
+    "",
+    "  Pay $19 to unlock the full audit + 90-day roadmap:",
+    "",
+    "  \u2500\u2500 Option 1: curl (instant) \u2500\u2500",
+    `    curl -X POST ${FROM_SKILL_ENDPOINT} \\`,
+    "      -H 'Content-Type: application/json' \\",
+    `      -d @${input.absolutePath}`,
+    "",
+    "  \u2500\u2500 Option 2: scan QR with your phone \u2500\u2500"
+  ];
+  process.stderr.write(header.join("\n") + "\n");
+  qrcode__default.default.generate(resumeUrl, { small: true }, (qr) => {
+    process.stderr.write(indent(qr, "    ") + "\n");
+  });
+  const footer = [
+    `    \u2192 ${resumeUrl}`,
+    "",
+    "  \u2500\u2500 Option 3: visit /resume and paste \u2500\u2500",
+    "    https://www.roastrebuild.com/resume",
+    `    Code: ${code}`,
+    "",
+    SEPARATOR2,
+    ""
+  ];
+  process.stderr.write(footer.join("\n"));
+}
+function indent(text, prefix) {
+  return text.split("\n").map((line) => line.length > 0 ? prefix + line : line).join("\n");
+}
 
 // src/cli.ts
 var DEFAULT_TIMEOUT_MS = 18e4;
@@ -5211,6 +5497,9 @@ function parseArgs(argv) {
   let cacheDir = DEFAULT_CACHE_DIR;
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   let enabled;
+  let exportJson = false;
+  let exportPath = "./roast.json";
+  let exportYes = false;
   let help = false;
   let version = false;
   for (let i = 0; i < argv.length; i += 1) {
@@ -5256,6 +5545,22 @@ function parseArgs(argv) {
         i += 1;
         break;
       }
+      case "--export-json": {
+        exportJson = true;
+        break;
+      }
+      case "--export-path": {
+        const next = argv[i + 1];
+        if (next === void 0) throw new Error("--export-path requires a value");
+        exportPath = next;
+        exportJson = true;
+        i += 1;
+        break;
+      }
+      case "--export-yes": {
+        exportYes = true;
+        break;
+      }
       case "--verifiers": {
         const next = argv[i + 1];
         if (next === void 0) throw new Error("--verifiers requires a comma-separated list");
@@ -5276,7 +5581,7 @@ function parseArgs(argv) {
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  return { cwd, url, cacheDir, timeoutMs, enabled, help, version };
+  return { cwd, url, cacheDir, timeoutMs, enabled, exportJson, exportPath, exportYes, help, version };
 }
 function printHelp() {
   process.stdout.write(`roast-runner ${RUNNER_VERSION}
@@ -5297,10 +5602,18 @@ Options:
   --timeout-ms <n>         Global timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})
   --verifiers <list>       Comma-separated subset (default: all)
                            Valid: ${VerifierNameSchema.options.join(", ")}
+  --export-json            Write a sanitized roast.json to the cwd for upload to
+                           roastrebuild.com (pre-fills the paid $19 audit).
+                           Interactive preview + Continue? prompt before write.
+  --export-path <path>     Custom path for the export (implies --export-json;
+                           default: ./roast.json)
+  --export-yes             Skip the interactive Continue prompt (e.g. for CI).
+                           Required when stdin is not a TTY.
   -h, --help               Print this help
   -v, --version            Print version
 
-Output: JSON RunReport on stdout (schemaVersion 1).
+Output: JSON RunReport on stdout (schemaVersion 1). Export file on disk if
+--export-json was passed. CTA + preview on stderr.
 Exit codes: 0 = ran (regardless of findings); 2 = bad args; 3 = runtime error.
 `);
 }
@@ -5344,6 +5657,9 @@ async function main(argv) {
       ...args.url !== void 0 ? { url: args.url } : {},
       ...args.enabled !== void 0 ? { enabled: args.enabled } : {}
     });
+    if (args.exportJson) {
+      await handleExport(args, report);
+    }
     process.stdout.write(`${JSON.stringify(report, null, 2)}
 `);
     return 0;
@@ -5353,6 +5669,25 @@ async function main(argv) {
 `);
     return 3;
   }
+}
+async function handleExport(args, report) {
+  const signal = new AbortController().signal;
+  const git = await detectGitInfo(args.cwd, signal);
+  const payload = buildExportPayload({
+    report,
+    git,
+    url: args.url,
+    cwd: args.cwd
+  });
+  const outPath = path.resolve(args.exportPath);
+  const preview = await runPreview(payload, { assumeYes: args.exportYes, outPath });
+  if (!preview.proceed) {
+    process.stderr.write(`[export] cancelled \u2014 ${preview.reason}
+`);
+    return;
+  }
+  const { bytesWritten, absolutePath } = await writeExportPayload(payload, outPath);
+  printExportCta({ payload, absolutePath, bytesWritten });
 }
 if (__require.main === module) {
   main(process.argv.slice(2)).then(
