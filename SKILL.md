@@ -1,6 +1,6 @@
 ---
 name: roast
-version: 0.7.0
+version: 0.7.1
 description: |
   The free Roast & Rebuild Claude Code skill. Runs a 6-module audit on
   the current local repository — Roast, Security, Architecture, Customer

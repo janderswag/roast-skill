@@ -2,6 +2,39 @@
 
 All notable changes to the `/roast` Claude Code skill.
 
+## 0.7.1 — 2026-05-21
+
+**Packaging hotfix.** v0.7.0 shipped with `qrcode-terminal` (a runtime
+dep used by the `--export-json` CTA) left external in the tsup bundle.
+The first `/roast` call after a fresh `git clone` crashed with
+`Cannot find module 'qrcode-terminal'`. Discovered by the v0.7.0 dogfood
+run.
+
+### What changed
+
+- `runner/tsup.config.ts`: added `qrcode-terminal` to `noExternal` so it
+  bundles into the CJS alongside `zod`. Bundle size: 189 KB → 224 KB
+  (+35 KB).
+- `runner/tsup.config.ts`: new `esbuildPlugins` entry that rewrites
+  legacy octal escapes (`"\033[40m"`) → hex (`"\x1B[40m"`) in
+  `qrcode-terminal/lib/main.js` at bundle time. Same ESC byte; esbuild's
+  strict-mode CJS bundling rejects the octal form.
+- `runner/dist/cli.cjs` rebuilt with the bundled dep.
+
+### What didn't change
+
+- All 218 unit tests pass (zero regressions vs v0.7.0)
+- Same CLI surface, same flags, same JSON schema
+- `.roast/last-audit.json` + `triage.json` formats unchanged
+
+### How to verify
+
+Run `/roast` (or `node ~/.claude/skills/roast/runner/dist/cli.cjs --version`)
+from any directory after `git pull origin main`. Should report
+`0.7.1` and not crash on the qrcode-terminal import.
+
+---
+
 ## 0.7.0 — 2026-05-20
 
 **Quality Foundation — Sprint 1.** Three structural additions to the

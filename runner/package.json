@@ -1,7 +1,7 @@
 {
   "name": "@roast-rebuild/runner",
-  "version": "0.7.0",
-  "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, dep-audit, axe-core, and Lighthouse findings into a normalized JSON shape. v0.7.0 adds cross-run finding signatures, trust-boundary tagging, and .roast/ local state for --delta + --triage.",
+  "version": "0.7.1",
+  "description": "Deterministic verifier runner for the /roast Claude Code skill. Aggregates semgrep, gitleaks, dep-audit, axe-core, and Lighthouse findings into a normalized JSON shape. v0.7.0 added cross-run finding signatures, trust-boundary tagging, and .roast/ local state for --delta + --triage. v0.7.1 is a packaging hotfix: bundles qrcode-terminal into the CJS so the first /roast call after a fresh git clone works without a manual npm install.",
   "private": true,
   "type": "module",
   "main": "dist/cli.cjs",

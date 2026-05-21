@@ -4,7 +4,7 @@ import type { Finding, RunReport, VerifierName, VerifierResult } from './types.j
 import { SEVERITY_RANK, summarize } from './types.js';
 import { enrichFinding } from './enrichment.js';
 
-export const RUNNER_VERSION = '0.7.0';
+export const RUNNER_VERSION = '0.7.1';
 export const SCHEMA_VERSION = 1 as const;
 
 export interface OrchestratorOptions {
